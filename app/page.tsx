@@ -1,65 +1,128 @@
-import Image from "next/image";
+'use client';
+
+import Link from 'next/link';
+import { Network, ArrowRight, GitMerge, FileCode, FlaskConical, MoreHorizontal } from 'lucide-react';
+
+const tools = [
+  {
+    title: "Visualize Step by Step",
+    description: "Interactive automata visualization and simulation. Build and test your automata.",
+    href: "/visualizer",
+    icon: Network,
+    color: "text-blue-400 group-hover:text-blue-300",
+    bg: "bg-blue-500/10 group-hover:bg-blue-500/20",
+    border: "border-blue-500/20 hover:border-blue-500/40",
+    badge: "Current"
+  },
+  {
+    title: "Convert NFA to DFA",
+    description: "Subset Construction → Lazy Evaluation algorithm. Visualize the conversion process.",
+    href: "/converter/nfa-to-dfa",
+    icon: GitMerge,
+    color: "text-purple-400 group-hover:text-purple-300",
+    bg: "bg-purple-500/10 group-hover:bg-purple-500/20",
+    border: "border-purple-500/20 hover:border-purple-500/40"
+  },
+  {
+    title: "Convert ENFA to DFA",
+    description: "N-Closure → Subset Construction → Lazy Evaluation for Epsilon-NFA.",
+    href: "/converter/enfa-to-dfa",
+    icon: FileCode,
+    color: "text-green-400 group-hover:text-green-300",
+    bg: "bg-green-500/10 group-hover:bg-green-500/20",
+    border: "border-green-500/20 hover:border-green-500/40"
+  },
+  {
+    title: "Convert RE to ENFA",
+    description: "Convert Regular Expressions to Epsilon-NFA.",
+    href: "/converter/re-to-enfa",
+    icon: FlaskConical,
+    color: "text-orange-400 group-hover:text-orange-300",
+    bg: "bg-orange-500/10 group-hover:bg-orange-500/20",
+    border: "border-orange-500/20 hover:border-orange-500/40"
+  },
+  {
+    title: "Coming Soon",
+    description: "More automata tools and converters in the future.",
+    href: "#",
+    icon: MoreHorizontal,
+    color: "text-gray-400",
+    bg: "bg-gray-800/50",
+    border: "border-gray-800",
+    disabled: true
+  }
+];
 
 export default function Home() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-8 font-sans">
+      <div className="max-w-6xl w-full flex flex-col gap-12">
+        
+        <header className="text-center space-y-4">
+          <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent pb-2">
+            AutomataViz
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="text-xl text-slate-400 max-w-2xl mx-auto">
+            A comprehensive suite for visualizing, simulating, and converting finite automata and regular expressions.
           </p>
+        </header>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {tools.map((tool, index) => {
+            const Icon = tool.icon;
+            return (
+              <Link 
+                key={index}
+                href={tool.disabled ? '#' : tool.href}
+                className={`
+                  relative group p-6 rounded-2xl border transition-all duration-300 overflow-hidden
+                  ${tool.border} ${tool.bg}
+                  ${tool.disabled ? 'cursor-not-allowed opacity-60' : 'hover:-translate-y-1 hover:shadow-xl hover:shadow-black/20'}
+                `}
+                aria-disabled={tool.disabled}
+              >
+                <div className="relative z-10 flex flex-col h-full gap-4">
+                  <div className="flex items-start justify-between">
+                    <div className={`p-3 rounded-xl bg-slate-950/50 w-fit border border-slate-800 backdrop-blur-sm ${tool.color}`}>
+                      <Icon className="w-8 h-8" />
+                    </div>
+                    {tool.badge && (
+                      <span className="px-3 py-1 text-xs font-semibold bg-blue-500/10 text-blue-400 rounded-full border border-blue-500/20 shadow-inner shadow-blue-500/10">
+                        {tool.badge}
+                      </span>
+                    )}
+                  </div>
+                  
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-100 mb-2 group-hover:text-white transition-colors">
+                      {tool.title}
+                    </h2>
+                    <p className="text-slate-400 text-sm leading-relaxed group-hover:text-slate-300">
+                      {tool.description}
+                    </p>
+                  </div>
+
+                  {!tool.disabled && (
+                    <div className="mt-auto pt-4 flex items-center text-sm font-medium text-slate-500 group-hover:text-white transition-colors">
+                      Launch Tool 
+                      <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+                    </div>
+                  )}
+                </div>
+                
+                {/* Decorative background gradient */}
+                {!tool.disabled && (
+                  <div className="absolute inset-0 bg-gradient-to-br from-transparent via-transparent to-white/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+                )}
+              </Link>
+            );
+          })}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        
+        <footer className="text-center text-slate-600 text-sm mt-12">
+          <p>© {new Date().getFullYear()} AutomataViz Project. Built for education.</p>
+        </footer>
+      </div>
     </div>
   );
 }

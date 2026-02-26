@@ -24,3 +24,40 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.visualizer-root .react-flow__controls {
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35) !important;
+  border: 1px solid #334155 !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+}
+
+.visualizer-root .react-flow__controls-button {
+  background: #0f172a !important;
+  border-bottom: 1px solid #334155 !important;
+  color: #e2e8f0 !important;
+}
+
+.visualizer-root .react-flow__controls-button:hover {
+  background: #1e293b !important;
+}
+
+.visualizer-root .react-flow__controls-button svg {
+  fill: #e2e8f0 !important;
+}
+
+.visualizer-root .react-flow__attribution {
+  display: none !important;
+}
+
+.visualizer-root .react-flow {
+  --xy-controls-button-background-color-default: #0f172a;
+  --xy-controls-button-background-color-hover-default: #1e293b;
+  --xy-controls-button-color-default: #e2e8f0;
+  --xy-controls-button-border-color-default: #334155;
+  --xy-controls-box-shadow-default: 0 4px 10px rgba(0, 0, 0, 0.35);
+}
+
+.visualizer-root .react-flow__panel.react-flow__attribution {
+  display: none !important;
+}
