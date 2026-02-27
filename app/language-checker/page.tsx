@@ -592,7 +592,7 @@ const MODE_INFO = {
     inputLabel: 'Test String (leave blank to test empty string)',
     inputPlaceholder: 'e.g. aabb',
     example: { expr: '(a|b)*abb', input: 'aabb' },
-    exports: [{ label: 'Open in RE → ε-NFA Converter', href: (expr: string) => `/converter/re-to-enfa?re=${encodeURIComponent(expr)}` }],
+    exports: [{ label: 'Open in RE → ε-NFA Converter', href: (expr: string) => `/automata/converter/re-to-enfa?re=${encodeURIComponent(expr)}` }],
   },
   CFL: {
     label: 'Context-Free Language',
@@ -649,7 +649,7 @@ const MODE_INFO = {
       expr: 'start: q0\naccept: qacc\nreject: qrej\n// Accept any string of a\'s\nq0, a -> q0, a, R\nq0, _ -> qacc, _, S\nq0, b -> qrej, b, S',
       input: 'aaa',
     },
-    exports: [{ label: 'Open in Visualizer (DTM mode)', href: () => `/visualizer` }],
+    exports: [{ label: 'Open in Visualizer (DTM mode)', href: () => `/automata/visualizer` }],
   },
 };
 

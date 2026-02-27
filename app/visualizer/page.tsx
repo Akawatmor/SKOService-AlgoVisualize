@@ -2699,7 +2699,7 @@ function AutomataEditor() {
           background: '#0f172a'
           }}>
           <span style={{ fontSize: 11, color: '#a78bfa', fontWeight: 700, letterSpacing: 0.4 }}>CONVERT</span>
-          <Link href={mode === 'eNFA' ? '/converter/enfa-to-dfa' : '/converter/nfa-to-dfa'} onClick={() => {
+          <Link href={mode === 'eNFA' ? '/automata/converter/enfa-to-dfa' : '/automata/converter/nfa-to-dfa'} onClick={() => {
               localStorage.setItem('automata-data-transfer', JSON.stringify({
                 source: 'visualizer',
                 nodes: getStateNodes(nodes), edges

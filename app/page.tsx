@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowRight, BrainCircuit, GitBranch, Network } from 'lucide-react';
+import { ArrowRight, BrainCircuit, GitBranch, Network, Bot } from 'lucide-react';
 
 const categories = [
   {
@@ -12,6 +12,16 @@ const categories = [
     color: 'text-blue-400 group-hover:text-blue-300',
     bg: 'bg-blue-500/10 group-hover:bg-blue-500/20',
     border: 'border-blue-500/20 hover:border-blue-500/40',
+    badge: 'Available',
+  },
+  {
+    title: 'ML Visualize',
+    description: 'Interactive tools for machine learning concepts, starting with neural network design.',
+    href: '/ml',
+    icon: Bot,
+    color: 'text-cyan-400 group-hover:text-cyan-300',
+    bg: 'bg-cyan-500/10 group-hover:bg-cyan-500/20',
+    border: 'border-cyan-500/20 hover:border-cyan-500/40',
     badge: 'Available',
   },
   {

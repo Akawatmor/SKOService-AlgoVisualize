@@ -471,7 +471,7 @@ function ReToEnfaScreen() {
     };
 
     localStorage.setItem('automata-visualizer-draft-v1', JSON.stringify(snapshot));
-    window.location.href = '/visualizer';
+    window.location.href = '/automata/visualizer';
   };
 
   const stats = useMemo(() => ({
