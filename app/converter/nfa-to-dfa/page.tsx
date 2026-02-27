@@ -76,6 +76,8 @@ const getKey = (ids: string[]): string =>
   ids.length === 0 ? '\u2205' : [...ids].sort().join(',');
 const LBL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const toLabel = (i: number) => i < 26 ? LBL[i] : LBL[Math.floor(i/26)-1]+LBL[i%26];
+const ROWS_PER_PAGE = 100;
+const DEFAULT_MAX_SUBSET_ROWS = 20000;
 
 function generatePowerSet(ids: string[]): string[][] {
   const sorted = [...ids].sort();
@@ -164,12 +166,9 @@ function layoutDfaGraph(reachable: DFARow[], alphabet: string[]) {
 
     const sourceHandle = sourceLaneMap[sourceBase][srcLane % sourceLaneMap[sourceBase].length];
     const targetHandle = targetLaneMap[targetBase][tgtLane % targetLaneMap[targetBase].length];
-    const edgeOffset = 20 + (srcLane % 3) * 10 + (tgtLane % 3) * 6;
-
     newEdges.push({ id: `e-${src}-${tgt}`, source: src, target: tgt,
       sourceHandle, targetHandle,
       label: syms.sort().join(', '), type: 'smoothstep',
-      pathOptions: { offset: edgeOffset, borderRadius: 14 },
       labelBgPadding: [5, 3],
       labelBgBorderRadius: 4,
       labelBgStyle: { fill: '#0b1220', fillOpacity: 0.92 },
@@ -198,6 +197,8 @@ function NfaToDfaConverter() {
   const [alphabet, setAlphabet] = useState<string[]>([]);
   const [bfsQueue, setBfsQueue] = useState<string[]>([]);
   const [nameMode, setNameMode] = useState<'label' | 'subset'>('label');
+  const [tablePage, setTablePage] = useState(1);
+  const [subsetRowLimit, setSubsetRowLimit] = useState(DEFAULT_MAX_SUBSET_ROWS);
   const [phase, setPhase] = useState<'idle'|'stepping'|'done'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -210,7 +211,6 @@ function NfaToDfaConverter() {
   useEffect(() => { nfaEdgesRef.current = nfaEdges; }, [nfaEdges]);
   useEffect(() => { alphabetRef.current = alphabet; }, [alphabet]);
   useEffect(() => { allRowsRef.current = allRows; }, [allRows]);
-
   useEffect(() => {
     const saved = localStorage.getItem('automata-data-transfer');
     if (saved) {
@@ -254,6 +254,7 @@ function NfaToDfaConverter() {
 
   const resetConversion = () => {
     setAllRows([]); setAlphabet([]); setBfsQueue([]); setPhase('idle'); setErrorMsg('');
+    setTablePage(1);
     setDfaNodes([]); setDfaEdges([]);
     allRowsRef.current = []; bfsQueueRef.current = [];
   };
@@ -267,6 +268,22 @@ function NfaToDfaConverter() {
     setErrorMsg('');
     const curNodes = nfaNodesRef.current, curEdges = nfaEdgesRef.current;
     if (curNodes.length === 0) { setErrorMsg('No states found.'); return; }
+    const estimatedRows = Math.pow(2, curNodes.length);
+    if (estimatedRows > subsetRowLimit) {
+      const choice = await Swal.fire({
+        title: 'Too many subsets',
+        html: `Estimated rows: <b>${estimatedRows.toLocaleString()}</b><br/>Current safety limit: <b>${subsetRowLimit.toLocaleString()}</b><br/><br/>You can bypass with a higher temporary limit (unsafe).`,
+        icon: 'warning',
+        showCancelButton: true,
+        showDenyButton: true,
+        confirmButtonText: 'Cancel',
+        denyButtonText: 'Bypass limit (unsafe)'
+      });
+      if (!choice.isDenied) return;
+
+      const tempLimit = Math.max(subsetRowLimit, estimatedRows);
+      setSubsetRowLimit(tempLimit);
+    }
     if (curNodes.length > 14) {
       const r = await Swal.fire({ title: 'Large graph', text: `${curNodes.length} states = ${Math.pow(2,curNodes.length)} rows. Continue?`, icon: 'warning', showCancelButton: true });
       if (!r.isConfirmed) return;
@@ -307,6 +324,7 @@ function NfaToDfaConverter() {
     const markedRows = rows.map(r => r.key===startKey ? {...r, isReachable:true} : r);
     allRowsRef.current = markedRows; bfsQueueRef.current = [startKey];
     setAlphabet(alpha); alphabetRef.current = alpha;
+    setTablePage(1);
     setAllRows(markedRows); setBfsQueue([startKey]); setPhase('stepping');
   };
 
@@ -341,7 +359,14 @@ function NfaToDfaConverter() {
     if (bfsQueueRef.current.length===0) return;
     const alpha = alphabetRef.current;
     let rows = [...allRowsRef.current]; let q = [...bfsQueueRef.current];
+    let guard = 0;
+    const maxGuard = Math.max(1000, rows.length * 4);
     while (q.length>0) {
+      guard += 1;
+      if (guard > maxGuard) {
+        setErrorMsg('Computation stopped to prevent browser freeze. Try Step mode or reduce the graph size.');
+        break;
+      }
       const [cur,...rest] = q; q=[...rest];
       rows = rows.map(r => r.key===cur ? {...r, isProcessed:true} : r);
       const curRow = rows.find(r=>r.key===cur)!;
@@ -421,11 +446,16 @@ function NfaToDfaConverter() {
     return nameMode === 'label' ? row.label : row.prettyName;
   }, [nameMode]);
 
+  const totalPages = Math.max(1, Math.ceil(allRows.length / ROWS_PER_PAGE));
+  const currentPage = Math.min(tablePage, totalPages);
+  const pageStart = (currentPage - 1) * ROWS_PER_PAGE;
+  const pagedRows = allRows.slice(pageStart, pageStart + ROWS_PER_PAGE);
+
   return (
-    <div className="flex h-screen flex-col bg-slate-950 text-slate-100 font-sans">
+    <div className="visualizer-root flex h-screen flex-col bg-slate-950 text-slate-100 font-sans">
       <header className="flex items-center justify-between px-5 py-3 border-b border-slate-800 bg-slate-900/60 backdrop-blur shrink-0 z-50">
         <div className="flex items-center gap-3">
-          <Link href="/" className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors">
+          <Link href="/automata" className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors">
             <ArrowLeft className="w-5 h-5" />
           </Link>
           <div>
@@ -469,9 +499,10 @@ function NfaToDfaConverter() {
               connectionMode={ConnectionMode.Loose} fitView
               onNodeDoubleClick={onNfaNodeDoubleClick}
               onNodeContextMenu={onNfaNodeContextMenu}
-              deleteKeyCode={null}>
+              deleteKeyCode={null}
+              proOptions={{ hideAttribution: true }}>
               <Background color="#1e293b" gap={20} size={1} />
-              <Controls className="bg-slate-800 border-slate-700 fill-slate-100" />
+              <Controls position="bottom-right" style={{ fill: '#0f172a' }} />
             </ReactFlow>
           </ReactFlowProvider>
         </div>
@@ -496,6 +527,9 @@ function NfaToDfaConverter() {
               </button>
             </div>
             {allRows.length>0 && <span className="ml-auto text-[10px] text-slate-500">{allRows.filter(r=>r.isReachable).length}/{allRows.length} reachable</span>}
+            {allRows.length > ROWS_PER_PAGE && (
+              <span className="text-[10px] text-amber-400 border border-amber-800/50 rounded px-1.5 py-0.5">Paged</span>
+            )}
           </div>
           {errorMsg && <div className="mx-3 mt-2 p-2.5 text-xs text-red-400 bg-red-950/40 rounded border border-red-900/40 shrink-0">{errorMsg}</div>}
           {phase==='stepping' && bfsQueue.length>0 && (
@@ -524,7 +558,7 @@ function NfaToDfaConverter() {
                   </tr>
                 </thead>
                 <tbody>
-                  {allRows.map(row=>{
+                  {pagedRows.map(row=>{
                     const isFH = bfsQueue[0]===row.key, inQ = bfsQueue.includes(row.key), unreach = !row.isReachable && phase!=='idle';
                     return (
                       <tr key={row.key} className={[
@@ -557,6 +591,17 @@ function NfaToDfaConverter() {
               </table>
             )}
           </div>
+          {allRows.length > ROWS_PER_PAGE && (
+            <div className="px-3 py-2 border-t border-slate-800 bg-slate-900/40 shrink-0 flex items-center justify-between text-[11px]">
+              <span className="text-slate-500">Page {currentPage}/{totalPages} · rows {pageStart + 1}-{Math.min(pageStart + ROWS_PER_PAGE, allRows.length)}</span>
+              <div className="flex items-center gap-1">
+                <button disabled={currentPage===1} onClick={() => setTablePage(1)} className="px-2 py-1 rounded bg-slate-800 border border-slate-700 disabled:opacity-40">«</button>
+                <button disabled={currentPage===1} onClick={() => setTablePage(p => Math.max(1, p-1))} className="px-2 py-1 rounded bg-slate-800 border border-slate-700 disabled:opacity-40">‹</button>
+                <button disabled={currentPage===totalPages} onClick={() => setTablePage(p => Math.min(totalPages, p+1))} className="px-2 py-1 rounded bg-slate-800 border border-slate-700 disabled:opacity-40">›</button>
+                <button disabled={currentPage===totalPages} onClick={() => setTablePage(totalPages)} className="px-2 py-1 rounded bg-slate-800 border border-slate-700 disabled:opacity-40">»</button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right: DFA result — wrapped in its own provider */}
@@ -567,10 +612,11 @@ function NfaToDfaConverter() {
           <ReactFlowProvider>
             <ReactFlow nodes={dfaNodes} edges={dfaEdges}
               onNodesChange={onDfaNodesChange} onEdgesChange={onDfaEdgesChange}
-              nodeTypes={nodeTypes} deleteKeyCode={null}>
+              nodeTypes={nodeTypes} deleteKeyCode={null}
+              proOptions={{ hideAttribution: true }}>
               <FitViewOnLoad nodeCount={dfaNodes.length} />
               <Background color="#0f172a" gap={20} size={1} />
-              <Controls className="bg-slate-800 border-slate-700 fill-slate-100" />
+              <Controls position="bottom-right" style={{ fill: '#0f172a' }} />
             </ReactFlow>
           </ReactFlowProvider>
           {dfaNodes.length===0 && (

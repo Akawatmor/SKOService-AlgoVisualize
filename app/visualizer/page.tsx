@@ -19,6 +19,8 @@ import {
   ConnectionMode,
   NodeChange,
   EdgeChange,
+  NodeResizer,
+  useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -27,6 +29,59 @@ type StateNodeProps = {
   data: { label: string; isStart?: boolean; isAccept?: boolean; isActive?: boolean };
   isConnectable?: boolean;
   selected?: boolean;
+};
+
+type TextNoteNodeData = {
+  text: string;
+  bgColor: string;
+  textColor: string;
+  borderColor: string;
+  borderWidth: number;
+  width: number;
+  height: number;
+  layer?: number;
+};
+
+type FrameBoxNodeData = {
+  title: string;
+  width: number;
+  height: number;
+  bgColor: string;
+  borderColor: string;
+  borderStyle: 'solid' | 'dashed' | 'dotted' | 'double';
+  borderWidth: number;
+  layer?: number;
+};
+
+const renderNoteTextWithInlineColors = (text: string, defaultColor: string): React.ReactNode[] => {
+  // Format: [[#f59e0b|highlight text]]
+  const regex = /\[\[(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)\|([\s\S]*?)\]\]/g;
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > last) {
+      out.push(
+        <span key={`plain-${last}`} style={{ color: defaultColor }}>
+          {text.slice(last, match.index)}
+        </span>
+      );
+    }
+    out.push(
+      <span key={`color-${match.index}`} style={{ color: match[1], fontWeight: 700 }}>
+        {match[2]}
+      </span>
+    );
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) {
+    out.push(
+      <span key={`plain-tail-${last}`} style={{ color: defaultColor }}>
+        {text.slice(last)}
+      </span>
+    );
+  }
+  return out;
 };
 
 const StateNode: React.FC<StateNodeProps> = ({ data, isConnectable, selected }) => {
@@ -75,16 +130,179 @@ const StateNode: React.FC<StateNodeProps> = ({ data, isConnectable, selected }) 
       }}
     >
       <div style={{ pointerEvents: 'none', userSelect: 'none' }}>{data.label}</div>
-      {/* ID ของ Handle: t, r, b, l (สำคัญสำหรับการ map ค่า) */}
-      <Handle type="source" position={Position.Top} id="t" isConnectable={isConnectable} style={handleStyle} />
-      <Handle type="source" position={Position.Right} id="r" isConnectable={isConnectable} style={handleStyle} />
+      {/* Primary connectable handles: t, r, b, l */}
+      <Handle type="source" position={Position.Top}    id="t" isConnectable={isConnectable} style={handleStyle} />
+      <Handle type="source" position={Position.Right}  id="r" isConnectable={isConnectable} style={handleStyle} />
       <Handle type="source" position={Position.Bottom} id="b" isConnectable={isConnectable} style={handleStyle} />
-      <Handle type="source" position={Position.Left} id="l" isConnectable={isConnectable} style={handleStyle} />
+      <Handle type="source" position={Position.Left}   id="l" isConnectable={isConnectable} style={handleStyle} />
+      {/* Invisible sub-handles for edge-routing separation (2 source + 2 target per direction) */}
+      <Handle type="source" position={Position.Top}    id="t-s1" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',left:'32%'}} />
+      <Handle type="source" position={Position.Top}    id="t-s2" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',left:'42%'}} />
+      <Handle type="target" position={Position.Top}    id="t-t1" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',left:'58%'}} />
+      <Handle type="target" position={Position.Top}    id="t-t2" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',left:'68%'}} />
+      <Handle type="source" position={Position.Right}  id="r-s1" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',top:'32%'}} />
+      <Handle type="source" position={Position.Right}  id="r-s2" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',top:'42%'}} />
+      <Handle type="target" position={Position.Right}  id="r-t1" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',top:'58%'}} />
+      <Handle type="target" position={Position.Right}  id="r-t2" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',top:'68%'}} />
+      <Handle type="source" position={Position.Bottom} id="b-s1" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',left:'32%'}} />
+      <Handle type="source" position={Position.Bottom} id="b-s2" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',left:'42%'}} />
+      <Handle type="target" position={Position.Bottom} id="b-t1" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',left:'58%'}} />
+      <Handle type="target" position={Position.Bottom} id="b-t2" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',left:'68%'}} />
+      <Handle type="source" position={Position.Left}   id="l-s1" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',top:'32%'}} />
+      <Handle type="source" position={Position.Left}   id="l-s2" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',top:'42%'}} />
+      <Handle type="target" position={Position.Left}   id="l-t1" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',top:'58%'}} />
+      <Handle type="target" position={Position.Left}   id="l-t2" isConnectable={false} style={{width:1,height:1,minWidth:0,minHeight:0,background:'transparent',border:'none',opacity:0,pointerEvents:'none',top:'68%'}} />
     </div>
   );
 };
 
-const nodeTypes = { stateNode: StateNode };
+const TextNoteNode: React.FC<{ id: string; data: TextNoteNodeData; selected?: boolean }> = ({ id, data, selected }) => {
+  const { setNodes } = useReactFlow();
+  return (
+    <div
+      style={{
+        width: Math.max(180, Number(data.width) || 240),
+        height: Math.max(90, Number(data.height) || 120),
+        background: data.bgColor || '#1f2937',
+        color: data.textColor || '#e5e7eb',
+        border: `${Math.max(1, Number(data.borderWidth) || 1)}px solid ${data.borderColor || '#64748b'}`,
+        borderRadius: 10,
+        padding: '10px 12px',
+        boxShadow: selected ? '0 0 0 3px #22d3ee66' : '0 4px 18px rgba(2,6,23,0.35)',
+        cursor: 'pointer',
+        whiteSpace: 'pre-wrap',
+        lineHeight: 1.45,
+        fontSize: 13,
+      }}
+      title="Double-click to edit note"
+    >
+      <NodeResizer
+        isVisible={!!selected}
+        minWidth={180}
+        minHeight={90}
+        lineStyle={{ borderColor: '#22d3ee' }}
+        handleStyle={{ width: 8, height: 8, borderRadius: 3, border: '1px solid #0f172a', background: '#22d3ee' }}
+        onResizeEnd={(_, params) => {
+          setNodes((nds) => nds.map((n) => n.id === id
+            ? {
+                ...n,
+                data: {
+                  ...(n.data as TextNoteNodeData),
+                  width: Math.round(params.width),
+                  height: Math.round(params.height),
+                }
+              }
+            : n
+          ));
+        }}
+      />
+      {renderNoteTextWithInlineColors(data.text || '', data.textColor || '#e5e7eb')}
+    </div>
+  );
+};
+
+const FrameBoxNode: React.FC<{ id: string; data: FrameBoxNodeData; selected?: boolean }> = ({ id, data, selected }) => {
+  const { setNodes } = useReactFlow();
+  return (
+    <div
+      style={{
+        width: Math.max(120, Number(data.width) || 320),
+        height: Math.max(90, Number(data.height) || 180),
+        background: data.bgColor || 'rgba(30,41,59,0.20)',
+        borderColor: data.borderColor || '#f59e0b',
+        borderStyle: data.borderStyle || 'dashed',
+        borderWidth: Math.max(1, Number(data.borderWidth) || 2),
+        borderRadius: 12,
+        color: '#e2e8f0',
+        boxSizing: 'border-box',
+        padding: '8px 10px',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'flex-start',
+        boxShadow: selected ? '0 0 0 3px #22d3ee66' : 'none',
+      }}
+      title="Double-click to edit frame"
+    >
+      <NodeResizer
+        isVisible={!!selected}
+        minWidth={120}
+        minHeight={90}
+        lineStyle={{ borderColor: '#22d3ee' }}
+        handleStyle={{ width: 8, height: 8, borderRadius: 3, border: '1px solid #0f172a', background: '#22d3ee' }}
+        onResizeEnd={(_, params) => {
+          setNodes((nds) => nds.map((n) => n.id === id
+            ? {
+                ...n,
+                data: {
+                  ...(n.data as FrameBoxNodeData),
+                  width: Math.round(params.width),
+                  height: Math.round(params.height),
+                }
+              }
+            : n
+          ));
+        }}
+      />
+      <div style={{
+        fontSize: 12,
+        fontWeight: 700,
+        background: 'rgba(15,23,42,0.75)',
+        border: `1px solid ${data.borderColor || '#f59e0b'}`,
+        borderRadius: 6,
+        padding: '2px 8px',
+      }}>
+        {data.title || 'Thompson Rule'}
+      </div>
+    </div>
+  );
+};
+
+const nodeTypes = { stateNode: StateNode, textNoteNode: TextNoteNode, frameBoxNode: FrameBoxNode };
+
+// --- Sub-handle routing helpers (module-level pure functions) ---
+/** Strip sub-handle suffix: "t-s1"→"t", "R-T2"→"r", etc. */
+const baseHandle = (h?: string | null): 't' | 'r' | 'b' | 'l' => {
+  const v = (h || '').trim().toLowerCase().replace(/[-_](s|t)\d+$/i, '');
+  if (v === 'r' || v === 'tr') return 'r';
+  if (v === 'b' || v === 'tb') return 'b';
+  if (v === 'l' || v === 'tl') return 'l';
+  return 't';
+};
+
+/**
+ * Build visual-only sub-handle assignment for rendering.
+ * It never mutates stored edge handles, so import/export schema stays unchanged (T/R/B/L).
+ */
+const buildDisplaySubHandleMap = (edgeList: Edge[]) => {
+  const srcGroups = new Map<string, Edge[]>();
+  const tgtGroups = new Map<string, Edge[]>();
+  edgeList.forEach(e => {
+    if (e.source === e.target) return; // self-loops keep their own routing
+    const sKey = `${e.source}:${baseHandle(e.sourceHandle)}`;
+    const tKey = `${e.target}:${baseHandle(e.targetHandle)}`;
+    if (!srcGroups.has(sKey)) srcGroups.set(sKey, []);
+    if (!tgtGroups.has(tKey)) tgtGroups.set(tKey, []);
+    srcGroups.get(sKey)!.push(e);
+    tgtGroups.get(tKey)!.push(e);
+  });
+  const newSrc = new Map<string, string>();
+  const newTgt = new Map<string, string>();
+  srcGroups.forEach(group =>
+    group.forEach((e, i) => newSrc.set(e.id, `${baseHandle(e.sourceHandle)}-s${(i % 2) + 1}`))
+  );
+  tgtGroups.forEach(group =>
+    group.forEach((e, i) => newTgt.set(e.id, `${baseHandle(e.targetHandle)}-t${(i % 2) + 1}`))
+  );
+  const out = new Map<string, { sourceHandle?: string; targetHandle?: string }>();
+  edgeList.forEach(e => {
+    if (e.source === e.target) return;
+    out.set(e.id, {
+      sourceHandle: newSrc.get(e.id) ?? e.sourceHandle ?? undefined,
+      targetHandle: newTgt.get(e.id) ?? e.targetHandle ?? undefined,
+    });
+  });
+  return out;
+};
 
 function AutomataEditor() {
   const VISUALIZER_DRAFT_KEY = 'automata-visualizer-draft-v1';
@@ -125,6 +343,8 @@ function AutomataEditor() {
   const tmConfigsRef = useRef(tmConfigs);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const getStateNodes = (list: Node[]) => list.filter(n => (n.type || 'stateNode') === 'stateNode');
+
   useEffect(() => { activeStatesRef.current = activeStates; }, [activeStates]);
   useEffect(() => { stepIndexRef.current = stepIndex; }, [stepIndex]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
@@ -152,7 +372,22 @@ function AutomataEditor() {
     targetHandle?: string;
     label?: string;
   }
-  interface ImportData { metadata?: { type?: ModeType }; nodes: ImportNode[]; edges: ImportEdge[]; }
+  interface ImportAnnotation {
+    id?: string;
+    kind?: 'text-note' | 'frame-box';
+    position?: { x: number; y: number };
+    text?: string;
+    title?: string;
+    width?: number;
+    height?: number;
+    bgColor?: string;
+    textColor?: string;
+    borderColor?: string;
+    borderStyle?: 'solid' | 'dashed' | 'dotted' | 'double';
+    borderWidth?: number;
+    layer?: number;
+  }
+  interface ImportData { metadata?: { type?: ModeType }; nodes: ImportNode[]; edges: ImportEdge[]; annotations?: ImportAnnotation[]; }
   type PdaRule = { input: string; pop: string; push: string };
   type PdaConfig = { state: string; stack: string[] };
   type TmRule = { read: string; write: string; move: 'L' | 'R' | 'S' };
@@ -394,7 +629,8 @@ function AutomataEditor() {
   };
 
   const normalizeConnector = (raw?: string): 't' | 'r' | 'b' | 'l' => {
-    const v = (raw || '').trim().toLowerCase();
+    // Strip sub-handle suffix (e.g. "t-s1" → "t", "R-T2" → "r") then normalise
+    const v = (raw || '').trim().toLowerCase().replace(/[-_](s|t)\d+$/i, '');
     if (v === 't' || v === 'tt') return 't';
     if (v === 'r' || v === 'tr') return 'r';
     if (v === 'b' || v === 'tb') return 'b';
@@ -482,13 +718,14 @@ function AutomataEditor() {
 
   // --- Simulation Actions ---
   const startSimulation = () => {
-    const startNode = nodes.find(n => n.data.isStart);
+    const stateNodes = getStateNodes(nodes);
+    const startNode = stateNodes.find(n => n.data.isStart);
     if (!startNode) {
       uiSwal.fire('Error', 'Start state not found.', 'error');
       return false;
     }
 
-    const isolatedNodes = nodes
+    const isolatedNodes = stateNodes
       .filter(n => !edges.some(e => e.source === n.id || e.target === n.id))
       .map(n => n.id);
     if (isolatedNodes.length > 0) {
@@ -500,14 +737,14 @@ function AutomataEditor() {
       return false;
     }
 
-    const hasAcceptingState = nodes.some(n => !!n.data.isAccept);
+    const hasAcceptingState = stateNodes.some(n => !!n.data.isAccept);
     if (!hasAcceptingState) {
       uiSwal.fire('Warning', 'No accepting state found. Please mark at least one accepting state before simulation.', 'warning');
       return false;
     }
 
     if (mode === 'DFA') {
-      const { issues } = validateAutomaton('DFA', nodes, edges);
+      const { issues } = validateAutomaton('DFA', stateNodes, edges);
       if (issues.length > 0) {
         uiSwal.fire({
           icon: 'error',
@@ -936,8 +1173,9 @@ function AutomataEditor() {
   const clearBoardActionRef = useRef<() => void>(() => {});
   const helpActionRef = useRef<() => void>(() => {});
   const prevStepActionRef = useRef<() => void>(() => {});
+  const dragSnapshotTakenRef = useRef(false);
 
-  // Keyboard shortcuts: Ctrl+Z undo, Ctrl+Y/Ctrl+Shift+Z redo, Ctrl+N add node, Ctrl+B prev step, Ctrl+Shift+Backspace clear, Ctrl+/ help, Delete remove
+  // Keyboard shortcuts: Ctrl+Z undo, Ctrl+Y/Ctrl+Shift+Z redo, Ctrl+N/Insert add node, Ctrl+B prev step, Ctrl+Shift+Backspace clear, Ctrl+/ help, Delete remove
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (promptOpenRef.current) return;
@@ -954,6 +1192,7 @@ function AutomataEditor() {
       }
 
       if (e.key === 'F1') { e.preventDefault(); helpActionRef.current(); return; }
+      if (e.key === 'Insert') { e.preventDefault(); addNodeActionRef.current(); return; }
 
       if (isRunning) {
         if (e.key === 'Delete' || e.key === 'Backspace') e.preventDefault();
@@ -1035,17 +1274,52 @@ function AutomataEditor() {
       if (typeof draft.nodeCount === 'number') setNodeCount(draft.nodeCount);
 
       if (Array.isArray(draft.nodes)) {
-        setNodes(draft.nodes.map((n) => ({
-          ...n,
-          type: 'stateNode',
-          data: {
-            ...(n.data || {}),
-            label: n.id,
-            isStart: !!(n.data as { isStart?: boolean })?.isStart,
-            isAccept: !!(n.data as { isAccept?: boolean })?.isAccept,
-            isActive: false,
+        setNodes(draft.nodes.map((n) => {
+          if (n.type === 'textNoteNode') {
+            return {
+              ...n,
+              type: 'textNoteNode',
+              data: {
+                text: String((n.data as { text?: string })?.text || 'Note'),
+                bgColor: String((n.data as { bgColor?: string })?.bgColor || '#1f2937'),
+                textColor: String((n.data as { textColor?: string })?.textColor || '#e5e7eb'),
+                borderColor: String((n.data as { borderColor?: string })?.borderColor || '#64748b'),
+                borderWidth: Number((n.data as { borderWidth?: number })?.borderWidth || 1),
+                width: Number((n.data as { width?: number })?.width || 240),
+                height: Number((n.data as { height?: number })?.height || 120),
+                layer: Number((n.data as { layer?: number })?.layer || 0),
+              }
+            } as Node;
           }
-        })));
+          if (n.type === 'frameBoxNode') {
+            return {
+              ...n,
+              type: 'frameBoxNode',
+              data: {
+                title: String((n.data as { title?: string })?.title || 'Thompson Rule'),
+                width: Number((n.data as { width?: number })?.width || 320),
+                height: Number((n.data as { height?: number })?.height || 180),
+                bgColor: String((n.data as { bgColor?: string })?.bgColor || 'rgba(30,41,59,0.20)'),
+                borderColor: String((n.data as { borderColor?: string })?.borderColor || '#f59e0b'),
+                borderStyle: ((n.data as { borderStyle?: 'solid' | 'dashed' | 'dotted' | 'double' })?.borderStyle || 'dashed'),
+                borderWidth: Number((n.data as { borderWidth?: number })?.borderWidth || 2),
+                layer: Number((n.data as { layer?: number })?.layer || 0),
+              }
+            } as Node;
+          }
+          return {
+            ...n,
+            type: 'stateNode',
+            data: {
+              ...(n.data || {}),
+              label: n.id,
+              isStart: !!(n.data as { isStart?: boolean })?.isStart,
+              isAccept: !!(n.data as { isAccept?: boolean })?.isAccept,
+              isActive: false,
+              layer: Number((n.data as { layer?: number })?.layer || 0),
+            }
+          } as Node;
+        }));
       }
 
       if (Array.isArray(draft.edges)) {
@@ -1053,6 +1327,8 @@ function AutomataEditor() {
           const label = (e.label as string) || '';
           return {
             ...e,
+            sourceHandle: normalizeConnector(e.sourceHandle ?? undefined),
+            targetHandle: normalizeConnector(e.targetHandle ?? undefined),
             type: 'smoothstep',
             markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
             style: { ...(e.style || {}), stroke: '#94a3b8', strokeWidth: 2 },
@@ -1088,25 +1364,62 @@ function AutomataEditor() {
   // --- Import / Export Functions (Updated Logic) ---
 
   const exportConfig = async () => {
+    const stateNodes = getStateNodes(nodes);
+    const annotationNodes = nodes.filter(n => n.type === 'textNoteNode' || n.type === 'frameBoxNode');
     const exportData = {
       metadata: { 
         name: `My_${mode}`, 
         type: mode,
         exportedAt: new Date().toISOString()
       },
-      nodes: nodes.map((n) => ({
+      nodes: stateNodes.map((n) => ({
         id: n.id,
         position: n.position,
         isStart: n.data.isStart,
-        isAccept: n.data.isAccept
+        isAccept: n.data.isAccept,
+        data: {
+          layer: Number((n.data as { layer?: number })?.layer || 0),
+        }
       })),
       edges: edges.map((e) => ({
         from: e.source,
-        from_con: e.sourceHandle ? e.sourceHandle.toUpperCase() : 'T', 
+        from_con: normalizeConnector(e.sourceHandle ?? undefined).toUpperCase(),
         to: e.target,
-        to_con: e.targetHandle ? e.targetHandle.toUpperCase() : 'T',
+        to_con: normalizeConnector(e.targetHandle ?? undefined).toUpperCase(),
         label: e.label
-      }))
+      })),
+      annotations: annotationNodes.map((n) => {
+        if (n.type === 'textNoteNode') {
+          const data = n.data as TextNoteNodeData;
+          return {
+            id: n.id,
+            kind: 'text-note',
+            position: n.position,
+            text: data.text,
+            bgColor: data.bgColor,
+            textColor: data.textColor,
+            borderColor: data.borderColor,
+            borderWidth: data.borderWidth,
+            width: data.width,
+            height: data.height,
+            layer: Number(data.layer || 0),
+          };
+        }
+        const data = n.data as FrameBoxNodeData;
+        return {
+          id: n.id,
+          kind: 'frame-box',
+          position: n.position,
+          title: data.title,
+          width: data.width,
+          height: data.height,
+          bgColor: data.bgColor,
+          borderColor: data.borderColor,
+          borderStyle: data.borderStyle,
+          borderWidth: data.borderWidth,
+          layer: Number(data.layer || 0),
+        };
+      })
     };
 
     const jsonString = JSON.stringify(exportData, null, 2);
@@ -1193,7 +1506,8 @@ function AutomataEditor() {
               label: n.id, 
               isStart: n.isStart ?? n.data?.isStart ?? false,
               isAccept: n.isAccept ?? n.data?.isAccept ?? false,
-              isActive: false 
+              isActive: false,
+              layer: Number((n.data as { layer?: number } | undefined)?.layer || 0),
             },
             selected: false
           } as Node;
@@ -1231,7 +1545,46 @@ function AutomataEditor() {
           }
         }
 
-        setNodes(newNodes);
+        const annotationNodes: Node[] = (parsedData.annotations || []).map((a, idx) => {
+          if (a.kind === 'frame-box') {
+            return {
+              id: a.id || `frame-${idx}-${Date.now()}`,
+              position: a.position || { x: 120, y: 120 },
+              type: 'frameBoxNode',
+              draggable: true,
+              selectable: true,
+              data: {
+                title: a.title || 'Thompson Rule',
+                width: Number(a.width || 320),
+                height: Number(a.height || 180),
+                bgColor: a.bgColor || 'rgba(30,41,59,0.20)',
+                borderColor: a.borderColor || '#f59e0b',
+                borderStyle: a.borderStyle || 'dashed',
+                borderWidth: Number(a.borderWidth || 2),
+                layer: Number(a.layer || 0),
+              } as FrameBoxNodeData,
+            } as Node;
+          }
+          return {
+            id: a.id || `note-${idx}-${Date.now()}`,
+            position: a.position || { x: 90, y: 90 },
+            type: 'textNoteNode',
+            draggable: true,
+            selectable: true,
+            data: {
+              text: a.text || 'Note',
+              bgColor: a.bgColor || '#1f2937',
+              textColor: a.textColor || '#e5e7eb',
+              borderColor: a.borderColor || '#64748b',
+              borderWidth: Number(a.borderWidth || 1),
+              width: Number(a.width || 240),
+              height: Number(a.height || 120),
+              layer: Number(a.layer || 0),
+            } as TextNoteNodeData,
+          } as Node;
+        });
+
+        setNodes(newNodes.concat(annotationNodes));
         setEdges(cleanedEdges);
         setNodeCount(maxId + 1);
 
@@ -1288,15 +1641,225 @@ function AutomataEditor() {
     if (isRunning) return;
     saveSnapshot();
     const id = `q${nodeCount}`;
-    const shouldBeStart = nodesRef.current.length === 0;
+    const shouldBeStart = getStateNodes(nodesRef.current).length === 0;
     const newNode: Node = {
       id,
       position: { x: 50 + (nodeCount % 6) * 130, y: 50 + Math.floor(nodeCount / 6) * 130 },
-      data: { label: id, isStart: shouldBeStart, isAccept: false, isActive: false },
+      data: { label: id, isStart: shouldBeStart, isAccept: false, isActive: false, layer: 0 },
       type: 'stateNode',
     };
     setNodes((nds) => nds.concat(newNode));
     setNodeCount((c) => c + 1);
+  };
+
+  const addTextNote = async () => {
+    if (isRunning) return;
+    const result = await uiSwal.fire({
+      title: 'Add Text Note',
+      html: `
+        <div style="display:flex;flex-direction:column;gap:8px;text-align:left;">
+          <textarea id="note-text" rows="4" style="width:100%;padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;">Thompson: [[#f59e0b|Union]] step here...</textarea>
+          <div style="font-size:12px;color:#94a3b8;">Partial color syntax: <code>[[#f59e0b|text]]</code></div>
+          <label style="font-size:12px;color:#94a3b8;">Background</label>
+          <input id="note-bg" type="color" value="#1f2937" style="width:72px;height:34px;border:none;background:transparent;" />
+          <label style="font-size:12px;color:#94a3b8;">Text Color</label>
+          <input id="note-fg" type="color" value="#e5e7eb" style="width:72px;height:34px;border:none;background:transparent;" />
+          <label style="font-size:12px;color:#94a3b8;">Border Color</label>
+          <input id="note-border" type="color" value="#64748b" style="width:72px;height:34px;border:none;background:transparent;" />
+          <label style="font-size:12px;color:#94a3b8;">Border Width</label>
+          <input id="note-border-width" type="number" min="1" max="12" value="1" style="width:100px;padding:6px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;" />
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Add',
+      preConfirm: () => {
+        const text = (document.getElementById('note-text') as HTMLTextAreaElement | null)?.value ?? '';
+        const bgColor = (document.getElementById('note-bg') as HTMLInputElement | null)?.value ?? '#1f2937';
+        const textColor = (document.getElementById('note-fg') as HTMLInputElement | null)?.value ?? '#e5e7eb';
+        const borderColor = (document.getElementById('note-border') as HTMLInputElement | null)?.value ?? '#64748b';
+        const borderWidth = Number((document.getElementById('note-border-width') as HTMLInputElement | null)?.value || 1);
+        if (!text.trim()) {
+          Swal.showValidationMessage('Text note cannot be empty');
+          return null;
+        }
+        return { text, bgColor, textColor, borderColor, borderWidth: Math.max(1, borderWidth), width: 240, height: 120, layer: 0 } as TextNoteNodeData;
+      }
+    });
+    if (!result.isConfirmed || !result.value) return;
+    saveSnapshot();
+    const noteId = `note-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const noteNode: Node = {
+      id: noteId,
+      type: 'textNoteNode',
+      position: { x: 120 + (nodes.length % 4) * 40, y: 120 + (nodes.length % 4) * 30 },
+      data: result.value as TextNoteNodeData,
+      draggable: true,
+      selectable: true,
+    } as Node;
+    setNodes(nds => nds.concat(noteNode));
+  };
+
+  const addFrameBox = async () => {
+    if (isRunning) return;
+    const result = await uiSwal.fire({
+      title: 'Add Frame Box',
+      html: `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:left;">
+          <label style="grid-column:1 / -1;font-size:12px;color:#94a3b8;">Title</label>
+          <input id="frame-title" value="Thompson Rule" style="grid-column:1 / -1;padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;" />
+          <label style="font-size:12px;color:#94a3b8;">Width</label>
+          <label style="font-size:12px;color:#94a3b8;">Height</label>
+          <input id="frame-width" type="number" min="120" value="320" style="padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;" />
+          <input id="frame-height" type="number" min="90" value="180" style="padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;" />
+          <label style="font-size:12px;color:#94a3b8;">Background</label>
+          <label style="font-size:12px;color:#94a3b8;">Border Color</label>
+          <input id="frame-bg" type="color" value="#1e293b" style="width:72px;height:34px;border:none;background:transparent;" />
+          <input id="frame-border" type="color" value="#f59e0b" style="width:72px;height:34px;border:none;background:transparent;" />
+          <label style="grid-column:1 / -1;font-size:12px;color:#94a3b8;">Border Style</label>
+          <select id="frame-style" style="grid-column:1 / -1;padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;">
+            <option value="solid">solid</option>
+            <option value="dashed" selected>dashed</option>
+            <option value="dotted">dotted</option>
+            <option value="double">double</option>
+          </select>
+          <label style="grid-column:1 / -1;font-size:12px;color:#94a3b8;">Border Width</label>
+          <input id="frame-border-width" type="number" min="1" max="12" value="2" style="grid-column:1 / -1;padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;" />
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Add',
+      preConfirm: () => {
+        const title = (document.getElementById('frame-title') as HTMLInputElement | null)?.value ?? 'Thompson Rule';
+        const width = Number((document.getElementById('frame-width') as HTMLInputElement | null)?.value || 320);
+        const height = Number((document.getElementById('frame-height') as HTMLInputElement | null)?.value || 180);
+        const bgColor = (document.getElementById('frame-bg') as HTMLInputElement | null)?.value ?? '#1e293b';
+        const borderColor = (document.getElementById('frame-border') as HTMLInputElement | null)?.value ?? '#f59e0b';
+        const borderStyle = ((document.getElementById('frame-style') as HTMLSelectElement | null)?.value || 'dashed') as FrameBoxNodeData['borderStyle'];
+        const borderWidth = Number((document.getElementById('frame-border-width') as HTMLInputElement | null)?.value || 2);
+        return { title, width: Math.max(120, width), height: Math.max(90, height), bgColor, borderColor, borderStyle, borderWidth: Math.max(1, borderWidth), layer: 0 } as FrameBoxNodeData;
+      }
+    });
+    if (!result.isConfirmed || !result.value) return;
+    saveSnapshot();
+    const frameId = `frame-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const frameNode: Node = {
+      id: frameId,
+      type: 'frameBoxNode',
+      position: { x: 160 + (nodes.length % 4) * 50, y: 160 + (nodes.length % 4) * 40 },
+      data: result.value as FrameBoxNodeData,
+      draggable: true,
+      selectable: true,
+    } as Node;
+    setNodes(nds => nds.concat(frameNode));
+  };
+
+  const editTextNote = async (node: Node) => {
+    const note = node.data as TextNoteNodeData;
+    const result = await uiSwal.fire({
+      title: `Edit Text Note — ${node.id}`,
+      html: `
+        <div style="display:flex;flex-direction:column;gap:8px;text-align:left;">
+          <textarea id="note-text" rows="4" style="width:100%;padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;">${(note.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+          <div style="font-size:12px;color:#94a3b8;">Partial color syntax: <code>[[#f59e0b|text]]</code></div>
+          <label style="font-size:12px;color:#94a3b8;">Background</label>
+          <input id="note-bg" type="color" value="${note.bgColor || '#1f2937'}" style="width:72px;height:34px;border:none;background:transparent;" />
+          <label style="font-size:12px;color:#94a3b8;">Text Color</label>
+          <input id="note-fg" type="color" value="${note.textColor || '#e5e7eb'}" style="width:72px;height:34px;border:none;background:transparent;" />
+          <label style="font-size:12px;color:#94a3b8;">Border Color</label>
+          <input id="note-border" type="color" value="${note.borderColor || '#64748b'}" style="width:72px;height:34px;border:none;background:transparent;" />
+          <label style="font-size:12px;color:#94a3b8;">Border Width</label>
+          <input id="note-border-width" type="number" min="1" max="12" value="${Math.max(1, Number(note.borderWidth || 1))}" style="width:100px;padding:6px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;" />
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Save',
+      preConfirm: () => {
+        const text = (document.getElementById('note-text') as HTMLTextAreaElement | null)?.value ?? '';
+        const bgColor = (document.getElementById('note-bg') as HTMLInputElement | null)?.value ?? '#1f2937';
+        const textColor = (document.getElementById('note-fg') as HTMLInputElement | null)?.value ?? '#e5e7eb';
+        const borderColor = (document.getElementById('note-border') as HTMLInputElement | null)?.value ?? '#64748b';
+        const borderWidth = Number((document.getElementById('note-border-width') as HTMLInputElement | null)?.value || 1);
+        if (!text.trim()) {
+          Swal.showValidationMessage('Text note cannot be empty');
+          return null;
+        }
+        return {
+          ...(note || {}),
+          text,
+          bgColor,
+          textColor,
+          borderColor,
+          borderWidth: Math.max(1, borderWidth),
+          width: Math.max(180, Number(note.width || 240)),
+          height: Math.max(90, Number(note.height || 120)),
+          layer: Number(note.layer || 0),
+        } as TextNoteNodeData;
+      }
+    });
+    if (!result.isConfirmed || !result.value) return;
+    saveSnapshot();
+    setNodes(nds => nds.map(n => n.id === node.id ? { ...n, data: result.value as TextNoteNodeData } : n));
+  };
+
+  const editFrameBox = async (node: Node) => {
+    const frame = node.data as FrameBoxNodeData;
+    const result = await uiSwal.fire({
+      title: `Edit Frame Box — ${node.id}`,
+      html: `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:left;">
+          <label style="grid-column:1 / -1;font-size:12px;color:#94a3b8;">Title</label>
+          <input id="frame-title" value="${(frame.title || 'Thompson Rule').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}" style="grid-column:1 / -1;padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;" />
+          <label style="font-size:12px;color:#94a3b8;">Width</label>
+          <label style="font-size:12px;color:#94a3b8;">Height</label>
+          <input id="frame-width" type="number" min="120" value="${Math.max(120, Number(frame.width || 320))}" style="padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;" />
+          <input id="frame-height" type="number" min="90" value="${Math.max(90, Number(frame.height || 180))}" style="padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;" />
+          <label style="font-size:12px;color:#94a3b8;">Background</label>
+          <label style="font-size:12px;color:#94a3b8;">Border Color</label>
+          <input id="frame-bg" type="color" value="${frame.bgColor || '#1e293b'}" style="width:72px;height:34px;border:none;background:transparent;" />
+          <input id="frame-border" type="color" value="${frame.borderColor || '#f59e0b'}" style="width:72px;height:34px;border:none;background:transparent;" />
+          <label style="grid-column:1 / -1;font-size:12px;color:#94a3b8;">Border Style</label>
+          <select id="frame-style" style="grid-column:1 / -1;padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;">
+            <option value="solid" ${(frame.borderStyle || 'dashed') === 'solid' ? 'selected' : ''}>solid</option>
+            <option value="dashed" ${(frame.borderStyle || 'dashed') === 'dashed' ? 'selected' : ''}>dashed</option>
+            <option value="dotted" ${(frame.borderStyle || 'dashed') === 'dotted' ? 'selected' : ''}>dotted</option>
+            <option value="double" ${(frame.borderStyle || 'dashed') === 'double' ? 'selected' : ''}>double</option>
+          </select>
+          <label style="grid-column:1 / -1;font-size:12px;color:#94a3b8;">Border Width</label>
+          <input id="frame-border-width" type="number" min="1" max="12" value="${Math.max(1, Number(frame.borderWidth || 2))}" style="grid-column:1 / -1;padding:8px;border-radius:6px;border:1px solid #475569;background:#071428;color:#fff;" />
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Save',
+      preConfirm: () => {
+        const title = (document.getElementById('frame-title') as HTMLInputElement | null)?.value ?? 'Thompson Rule';
+        const width = Number((document.getElementById('frame-width') as HTMLInputElement | null)?.value || 320);
+        const height = Number((document.getElementById('frame-height') as HTMLInputElement | null)?.value || 180);
+        const bgColor = (document.getElementById('frame-bg') as HTMLInputElement | null)?.value ?? '#1e293b';
+        const borderColor = (document.getElementById('frame-border') as HTMLInputElement | null)?.value ?? '#f59e0b';
+        const borderStyle = ((document.getElementById('frame-style') as HTMLSelectElement | null)?.value || 'dashed') as FrameBoxNodeData['borderStyle'];
+        const borderWidth = Number((document.getElementById('frame-border-width') as HTMLInputElement | null)?.value || 2);
+        return { ...frame, title, width: Math.max(120, width), height: Math.max(90, height), bgColor, borderColor, borderStyle, borderWidth: Math.max(1, borderWidth), layer: Number(frame.layer || 0) } as FrameBoxNodeData;
+      }
+    });
+    if (!result.isConfirmed || !result.value) return;
+    saveSnapshot();
+    setNodes(nds => nds.map(n => n.id === node.id ? { ...n, data: result.value as FrameBoxNodeData } : n));
+  };
+
+  const changeSelectedLayer = (delta: number) => {
+    if (isRunning) return;
+    const selectedCount = nodesRef.current.filter(n => n.selected).length;
+    if (selectedCount === 0) {
+      uiSwal.fire('Info', 'Select at least one node to change layer.', 'info');
+      return;
+    }
+    saveSnapshot();
+    setNodes(nds => nds.map((n) => {
+      if (!n.selected) return n;
+      const currentLayer = Number((n.data as { layer?: number })?.layer || 0);
+      const nextLayer = Math.max(-50, Math.min(50, currentLayer + delta));
+      return { ...n, data: { ...(n.data || {}), layer: nextLayer } };
+    }));
   };
 
   // Update stable action refs after every render (inside layout effect to satisfy React compiler)
@@ -1558,7 +2121,7 @@ function AutomataEditor() {
           </ul>
           <div><strong>Shortcuts</strong></div>
           <ul style="margin:6px 0 0 18px;padding:0;">
-            <li>Ctrl+N: New Node</li>
+            <li>Ctrl+N or Insert: New Node</li>
             <li>Ctrl+B: Previous Step</li>
             <li>Ctrl+Z / Ctrl+Y: Undo / Redo</li>
             <li>Ctrl+Shift+Backspace: Clear Board</li>
@@ -1673,14 +2236,29 @@ function AutomataEditor() {
         }
 
         saveSnapshot();
-        setEdges((eds) => addEdge({
-          ...conn,
-          label: nextValue,
-          type: 'smoothstep',
-          markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
-          style: { stroke: '#94a3b8', strokeWidth: 2 },
-          animated: isEpsilon(nextValue)
-        } as Edge, eds));
+        const sourceHandle = normalizeConnector(conn.sourceHandle ?? undefined);
+        const targetHandle = normalizeConnector(conn.targetHandle ?? undefined);
+        const newEdgeId = `e-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        setEdges((eds) => {
+          // Override behavior: if this source-direction or target-direction is already used,
+          // remove old transition(s) and keep only the new one.
+          const filtered = eds.filter((e) => {
+            const sourceConflict = !!conn.source && e.source === conn.source && baseHandle(e.sourceHandle) === sourceHandle;
+            const targetConflict = !!conn.target && e.target === conn.target && baseHandle(e.targetHandle) === targetHandle;
+            return !(sourceConflict || targetConflict);
+          });
+          return addEdge({
+            id: newEdgeId,
+            ...conn,
+            sourceHandle,
+            targetHandle,
+            label: nextValue,
+            type: 'smoothstep',
+            markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
+            style: { stroke: '#94a3b8', strokeWidth: 2 },
+            animated: isEpsilon(nextValue)
+          } as Edge, filtered);
+        });
       }
     } else if (kind === 'editLabel') {
       const edge = params as Edge;
@@ -1759,13 +2337,33 @@ function AutomataEditor() {
   const onNodeDoubleClick = (e: React.MouseEvent, node: Node) => {
     if (isRunning) return;
     e.preventDefault(); 
-    handleNodeSettings(node.id);
+    if ((node.type || 'stateNode') === 'stateNode') {
+      handleNodeSettings(node.id);
+      return;
+    }
+    if (node.type === 'textNoteNode') {
+      void editTextNote(node);
+      return;
+    }
+    if (node.type === 'frameBoxNode') {
+      void editFrameBox(node);
+    }
   };
 
   const onNodeContextMenu = (e: React.MouseEvent, node: Node) => {
     if (isRunning) return;
     e.preventDefault(); 
-    handleNodeSettings(node.id);
+    if ((node.type || 'stateNode') === 'stateNode') {
+      handleNodeSettings(node.id);
+      return;
+    }
+    if (node.type === 'textNoteNode') {
+      void editTextNote(node);
+      return;
+    }
+    if (node.type === 'frameBoxNode') {
+      void editFrameBox(node);
+    }
   };
 
   const onEdgeClick = (_: React.MouseEvent, edge: Edge) => {
@@ -1781,37 +2379,108 @@ function AutomataEditor() {
     setSelectedEdgeId(null);
   };
 
-  const displayNodes = nodes.map(node => ({
-    ...node, data: { ...node.data, isActive: activeStates.has(node.id) }
-  }));
+  const displayNodes = nodes.map(node => {
+    const layer = Number((node.data as { layer?: number })?.layer || 0);
+    if ((node.type || 'stateNode') === 'stateNode') {
+      return { ...node, zIndex: layer, data: { ...node.data, isActive: activeStates.has(node.id), layer } };
+    }
+    return { ...node, zIndex: layer, data: { ...node.data, layer } };
+  });
+
+  const selectedLayerText = React.useMemo(() => {
+    const selected = nodes.filter(n => n.selected);
+    if (selected.length === 0) return 'Layer: —';
+    const layers = selected.map(n => Number((n.data as { layer?: number })?.layer || 0));
+    const unique = Array.from(new Set(layers));
+    if (unique.length === 1) return `Layer: ${unique[0]}`;
+    return `Layer: mixed (${Math.min(...layers)}..${Math.max(...layers)})`;
+  }, [nodes]);
 
   const handleNodesChange = React.useCallback((changes: NodeChange<Node>[]) => {
     if (isRunning) return;
     onNodesChange(changes);
   }, [isRunning, onNodesChange]);
 
+  const handleNodeDragStart = React.useCallback(() => {
+    if (isRunning) return;
+    if (dragSnapshotTakenRef.current) return;
+    saveSnapshot();
+    dragSnapshotTakenRef.current = true;
+  }, [isRunning]);
+
+  const handleNodeDragStop = React.useCallback(() => {
+    dragSnapshotTakenRef.current = false;
+  }, []);
+
   const handleEdgesChange = React.useCallback((changes: EdgeChange<Edge>[]) => {
     if (isRunning) return;
     onEdgesChange(changes);
   }, [isRunning, onEdgesChange]);
 
-  const displayEdges = edges.map(edge =>
-    edge.id === selectedEdgeId
-      ? { ...edge, style: { ...(edge.style || {}), stroke: '#facc15', strokeWidth: 3 }, markerEnd: { type: MarkerType.ArrowClosed, color: '#facc15' } }
-      : edge
-  );
+  const edgeLaneMeta = React.useMemo(() => {
+    const groups = new Map<string, Edge[]>();
+    edges.forEach((edge) => {
+      const a = edge.source;
+      const b = edge.target;
+      const key = a < b ? `${a}::${b}` : `${b}::${a}`;
+      const arr = groups.get(key) || [];
+      arr.push(edge);
+      groups.set(key, arr);
+    });
+
+    const out = new Map<string, { lane: number; size: number }>();
+    groups.forEach((arr) => {
+      const size = arr.length;
+      const center = (size - 1) / 2;
+      arr.forEach((edge, idx) => {
+        out.set(edge.id as string, { lane: idx - center, size });
+      });
+    });
+    return out;
+  }, [edges]);
+
+  const displaySubHandleMap = React.useMemo(() => buildDisplaySubHandleMap(edges), [edges]);
+
+  const displayEdges = edges.map(edge => {
+    const meta = edgeLaneMeta.get(edge.id as string);
+    const visualHandles = displaySubHandleMap.get(edge.id as string);
+    let nextEdge: Edge = {
+      ...edge,
+      type: 'smoothstep',
+      sourceHandle: visualHandles?.sourceHandle ?? edge.sourceHandle,
+      targetHandle: visualHandles?.targetHandle ?? edge.targetHandle,
+    };
+
+    if (meta && meta.size > 1) {
+      nextEdge = {
+        ...nextEdge,
+        zIndex: 1 + Math.abs(meta.lane),
+      } as Edge;
+    }
+
+    if (edge.id === selectedEdgeId) {
+      nextEdge = {
+        ...nextEdge,
+        style: { ...(nextEdge.style || {}), stroke: '#facc15', strokeWidth: 3 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#facc15' }
+      } as Edge;
+    }
+
+    return nextEdge;
+  });
 
   // --- Machine summary / Transition table data ---
-  const Q = nodes.map(n => n.id);
-  const q0 = nodes.find(n => n.data.isStart)?.id || '—';
-  const F = nodes.filter(n => n.data.isAccept).map(n => n.id);
+  const stateNodes = getStateNodes(nodes);
+  const Q = stateNodes.map(n => n.id);
+  const q0 = stateNodes.find(n => n.data.isStart)?.id || '—';
+  const F = stateNodes.filter(n => n.data.isAccept).map(n => n.id);
   const alphabet = getAlphabetFromEdges(edges).filter(s => s !== 'e' && s !== 'ε');
 
   // build transition map: state -> symbol -> [targets]
   const buildTransitionMap = () => {
     const allowsEpsilonColumn = mode === 'eNFA' || mode === 'DPDA' || mode === 'NPDA';
     const map: Record<string, Record<string, string[]>> = {};
-    nodes.forEach(n => {
+    stateNodes.forEach(n => {
       map[n.id] = {};
       const syms = [...alphabet];
       if (allowsEpsilonColumn) syms.push('ε');
@@ -1866,7 +2535,7 @@ function AutomataEditor() {
   const transitionMap = buildTransitionMap();
 
   const isAccepted = () => {
-      const acceptNodeIds = nodes.filter(n => n.data.isAccept).map(n => n.id);
+      const acceptNodeIds = stateNodes.filter(n => n.data.isAccept).map(n => n.id);
       if (isTmMode) {
         return tmConfigs.some(cfg => acceptNodeIds.includes(cfg.state));
       }
@@ -1953,9 +2622,22 @@ function AutomataEditor() {
                     onKeyDown={(e) => { if (e.key === 'Enter') handleSubmitPrompt(promptValue); }}
                     style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid #475569', background: '#071428', color: '#fff', marginBottom: 12, boxSizing: 'border-box' }}
                   />
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <div>
+                      {mode !== 'DFA' && (promptState.kind === 'edgeLabel' || promptState.kind === 'editLabel') && (
+                        <button
+                          onClick={() => setPromptValue((prev) => `${prev}ε`)}
+                          style={{ background: '#1d4ed8', color: '#dbeafe', border: '1px solid #3b82f6', padding: '8px 12px', borderRadius: 6, cursor: 'pointer', fontWeight: 700 }}
+                          title="Insert epsilon"
+                        >
+                          ε
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
                     <button onClick={() => { closePrompt(); }} style={{ background: '#334155', color: '#e2e8f0', border: 'none', padding: '8px 12px', borderRadius: 6, cursor: 'pointer' }}>Cancel</button>
                     <button onClick={() => handleSubmitPrompt(promptValue)} style={{ background: '#0ea5e9', color: '#04293a', border: 'none', padding: '8px 12px', borderRadius: 6, cursor: 'pointer' }}>OK</button>
+                    </div>
                   </div>
                 </>
               )}
@@ -1967,6 +2649,9 @@ function AutomataEditor() {
       {/* Top Navbar: Control Panel */}
       <div style={{ padding: '10px 20px', background: '#1e293b', borderBottom: '1px solid #334155', display: 'flex', gap: '12px', alignItems: 'stretch', zIndex: 10, minHeight: '60px' }}>
         <div style={{ display: 'flex', alignItems: 'center', alignContent: 'center', flexWrap: 'wrap', rowGap: 8, columnGap: 12, flex: 1, minWidth: 0, paddingBottom: 2 }}>
+        <Link href="/automata" title="Back to Automata" style={{ textDecoration: 'none' }}>
+          <button style={{ cursor: 'pointer', background: '#0f172a', border: '1px solid #475569', padding: '8px 12px', borderRadius: '4px', color: '#e2e8f0', fontWeight: 700 }}>← Home</button>
+        </Link>
         <div style={{ fontWeight: 'bold', fontSize: '18px', color: '#0ea5e9', marginRight: '10px' }}>AutomataViz</div>
         <div style={{ width: '1px', height: '30px', background: '#475569', margin: '0 5px' }}></div>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -2017,7 +2702,7 @@ function AutomataEditor() {
           <Link href={mode === 'eNFA' ? '/converter/enfa-to-dfa' : '/converter/nfa-to-dfa'} onClick={() => {
               localStorage.setItem('automata-data-transfer', JSON.stringify({
                 source: 'visualizer',
-                nodes, edges
+                nodes: getStateNodes(nodes), edges
               }));
             }} style={{ textDecoration: 'none' }}>
               <button style={{
@@ -2037,9 +2722,57 @@ function AutomataEditor() {
             </Link>
           </div>
         )}
+
+        <button
+          disabled={isRunning}
+          onClick={() => { void addTextNote(); }}
+          style={{ cursor: isRunning ? 'default' : 'pointer', background: isRunning ? '#1e293b' : '#0f766e', border: 'none', padding: '8px 16px', borderRadius: '4px', color: isRunning ? '#64748b' : 'white' }}
+          title="Add text note"
+        >
+          📝 Text Note
+        </button>
+        <button
+          disabled={isRunning}
+          onClick={() => { void addFrameBox(); }}
+          style={{ cursor: isRunning ? 'default' : 'pointer', background: isRunning ? '#1e293b' : '#d97706', border: 'none', padding: '8px 16px', borderRadius: '4px', color: isRunning ? '#64748b' : 'white' }}
+          title="Add frame box"
+        >
+          ⬚ Frame Box
+        </button>
+
+        <button
+          disabled={isRunning}
+          onClick={() => changeSelectedLayer(-1)}
+          style={{ cursor: isRunning ? 'default' : 'pointer', background: isRunning ? '#1e293b' : '#1d4ed8', border: 'none', padding: '8px 14px', borderRadius: '4px', color: isRunning ? '#64748b' : 'white', fontWeight: 700 }}
+          title="Move selected node(s) one layer backward"
+        >
+          Layer -
+        </button>
+        <button
+          disabled={isRunning}
+          onClick={() => changeSelectedLayer(1)}
+          style={{ cursor: isRunning ? 'default' : 'pointer', background: isRunning ? '#1e293b' : '#2563eb', border: 'none', padding: '8px 14px', borderRadius: '4px', color: isRunning ? '#64748b' : 'white', fontWeight: 700 }}
+          title="Move selected node(s) one layer forward"
+        >
+          Layer +
+        </button>
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          padding: '7px 10px',
+          borderRadius: 6,
+          border: '1px solid #334155',
+          background: '#0f172a',
+          color: '#cbd5e1',
+          fontSize: 12,
+          fontWeight: 700,
+          minWidth: 110,
+          justifyContent: 'center'
+        }} title="Current layer of selected node(s)">
+          {selectedLayerText}
+        </div>
         
         {/* Import / Export Buttons */}
-        <button disabled={isRunning} onClick={addNode} title="Add Node (Ctrl+N)" style={{ cursor: isRunning ? 'default' : 'pointer', background: isRunning ? '#1e293b' : '#334155', border: 'none', padding: '8px 16px', borderRadius: '4px', color: isRunning ? '#64748b' : 'white' }}>➕ New Node</button>
         <button disabled={isRunning} onClick={clearBoard} style={{ cursor: isRunning ? 'default' : 'pointer', background: isRunning ? '#1e293b' : '#475569', border: 'none', padding: '8px 16px', borderRadius: '4px', color: isRunning ? '#64748b' : 'white' }}>🧹 Clear Board</button>
         <button onClick={showHelp} title="Help (Ctrl+/ or F1)" style={{ cursor: 'pointer', background: '#0f172a', border: '1px solid #475569', padding: '8px 16px', borderRadius: '4px', color: '#e2e8f0' }}>❔ Help</button>
         <button onClick={exportConfig} style={{ cursor: 'pointer', background: '#8b5cf6', border: 'none', padding: '8px 16px', borderRadius: '4px', color: 'white' }}>💾 Export</button>
@@ -2067,6 +2800,8 @@ function AutomataEditor() {
             edges={displayEdges}
             nodeTypes={nodeTypes}
             onNodesChange={handleNodesChange}
+            onNodeDragStart={handleNodeDragStart}
+            onNodeDragStop={handleNodeDragStop}
             onEdgesChange={handleEdgesChange}
             onConnect={onConnect}
             onNodeDoubleClick={onNodeDoubleClick}
@@ -2080,7 +2815,10 @@ function AutomataEditor() {
             nodesConnectable={!isRunning}
             elementsSelectable={!isRunning}
             proOptions={{ hideAttribution: true }}
+            minZoom={0.05}
+            maxZoom={4}
             fitView
+            fitViewOptions={{ padding: 0.2, minZoom: 0.05, maxZoom: 2 }}
             style={{ background: '#0f172a' }}
           >
             <Background color="#334155" gap={20} size={1} /> 
@@ -2296,7 +3034,7 @@ function AutomataEditor() {
                 </tr>
               </thead>
               <tbody>
-                {nodes.map(n => {
+                {stateNodes.map(n => {
                   const isStart = n.id === q0;
                   const isAccept = F.includes(n.id);
                   const prefix = (isStart ? '→' : '') + (isAccept ? '*' : '');
