@@ -50,18 +50,30 @@ const categories = [
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-8 font-sans">
-      <div className="max-w-6xl w-full flex flex-col gap-12">
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans relative overflow-hidden">
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute -top-24 -left-24 w-80 h-80 bg-cyan-500/10 blur-3xl rounded-full" />
+        <div className="absolute -bottom-24 -right-24 w-96 h-96 bg-violet-500/10 blur-3xl rounded-full" />
+      </div>
+
+      <nav className="sticky top-0 z-20 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 md:px-8 py-3 flex items-center justify-between">
+          <div className="text-sm text-slate-400">Welcome to</div>
+          <div className="text-base sm:text-lg font-bold bg-gradient-to-r from-cyan-300 to-blue-400 bg-clip-text text-transparent">Akawatmor</div>
+        </div>
+      </nav>
+
+      <div className="max-w-6xl mx-auto w-full px-4 sm:px-6 md:px-8 py-8 md:py-12 flex flex-col gap-8 md:gap-12 relative z-10">
         <header className="text-center space-y-4">
-          <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent pb-2">
+          <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent pb-2 drop-shadow-[0_0_16px_rgba(59,130,246,0.25)]">
             CS Visualize
           </h1>
-          <p className="text-xl text-slate-400 max-w-2xl mx-auto">
+          <p className="text-base sm:text-lg md:text-xl text-slate-400 max-w-2xl mx-auto">
             A hub of computer science visual tools by topic.
           </p>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
           {categories.map((category, index) => {
             const Icon = category.icon;
             return (
@@ -69,9 +81,9 @@ export default function Home() {
                 key={index}
                 href={category.disabled ? '#' : category.href}
                 className={`
-                  relative group p-6 rounded-2xl border transition-all duration-300 overflow-hidden
+                  relative group p-5 sm:p-6 rounded-2xl border transition-all duration-300 overflow-hidden backdrop-blur-sm
                   ${category.border} ${category.bg}
-                  ${category.disabled ? 'cursor-not-allowed opacity-70' : 'hover:-translate-y-1 hover:shadow-xl hover:shadow-black/20'}
+                  ${category.disabled ? 'cursor-not-allowed opacity-70' : 'hover:-translate-y-1 hover:shadow-2xl hover:shadow-black/30'}
                 `}
                 aria-disabled={category.disabled}
               >
@@ -108,8 +120,8 @@ export default function Home() {
           })}
         </div>
 
-        <footer className="text-center text-slate-600 text-sm mt-12">
-          <p>© {new Date().getFullYear()} CS Visualize Project.</p>
+        <footer className="text-center text-slate-500 text-sm mt-10 border-t border-slate-800 pt-6">
+          <p>© {new Date().getFullYear()} CS Visualize · Owner: Akawatmor</p>
         </footer>
       </div>
     </div>
