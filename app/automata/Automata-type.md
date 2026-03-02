@@ -1,27 +1,77 @@
-## DO NOT DELETE!
+### DO NOT DELETE!
 
 ## This is the keep track of the automata features which i willing to add into the future
 
-### Finite Automata
-- [x] Deterministic Finite Automata 
-- [x] Non-Deterministic Finite Automata 
-- [x] Non-Deterministic Finite Automata with epsilon transistion
-- [ ]
+---
 
-###  Push Down Automata
-- [x] Deterministic Pushdown Automata
-- [x] Non-Deterministic Pushdown Automata
-- [ ]
+## Legend
 
-### Linear-Bounded Automata
-- [ ]
-- [ ]
+* ⚪ To-do / Planned
+* 🟡 In Progress
+* 🟢 Completed
+* 🔴 Cancelled
+* 🔵 N/A
 
-### Turing Machine
+### Finite Automata (Type 3)
 
-- [ ] Two-ways Finite Automata
-- [ ] Multi-head Finite Automata
-- [ ] Alternating Finite Automata
+* 🟢 Standard Finite Automata
+  * 🟢 Deterministic
+  * 🟢 Non-Deterministic
+  * 🟢 Non-Deterministic with ε-transistion
+* ⚪ Two-Way Deterministic
+  * ⚪ Deterministic
+  * ⚪ Non-Deterministic
+  * ⚪ Non-Deterministic with ε-transistion
+* ⚪ Multi-head Finite Automata
+  * ⚪ Deterministic
+  * ⚪ Non-Deterministic
+  * ⚪ Non-Deterministic with ε-transistion
+* ⚪ Alternating Finite Automata (NFA)
+
+---
+
+### Büchi Automata
+
+* ⚪ Deterministic
+* ⚪ Non-Deterministic
+* ⚪ Non-Deterministic with ε-transistion
+
+---
+
+### Timed Automata
+
+* ⚪ Deterministic
+* ⚪ Non-Deterministic
+* ⚪ Non-Deterministic with ε-transistion
+
+---
+
+### Push Down Automata (Type 2)
+
+* 🟢 Deterministic
+* 🟢 Non-Deterministic
+* 🔵 Non-Deterministic with ε-transistion
+
+---
+
+### Linear-Bounded Automata (Type 1)
+
+- [ ] Deterministic Linear-Bounded Automata
+- [ ] Non-Deterministic Linear-Bounded Automata
+
+---
+
+### Turing Machine (Type 0)
+
+- [x] Deterministic Turing Machine
+- [x] Non-Deterministic Turing Machine
+
+---
+
+
+
+### s
+
 
 - [ ] Hybrid Automata
 - [ ] Register Automata
@@ -34,8 +84,7 @@
 - [ ] Mealy Machine
 - [ ] Finite State Transducer
 
-- [ ] Büchi Automata
-- [ ] Timed Automata
+
 
 - [ ] Weighted Automata
 - [ ] Max-Plus / Min-Plus Automata
@@ -47,3 +96,46 @@
 - [ ] Hybrid Automata
 - [ ] Quantum Finite Automata
 - [ ] Learning Automata
+
+### Scrap (ref in future)
+🔴
+U+1F534 
+🔵
+U+1F535 
+🟠
+U+1F7E0 
+🟡
+U+1F7E1 
+🟢
+U+1F7E2 
+🟣
+U+1F7E3 
+🟤
+U+1F7E4 
+⚫
+U+26AB 
+⚪
+U+26AA
+
+🟥
+U+1F7E5 
+🟦
+U+1F7E6 
+🟧
+U+1F7E7 
+🟨
+U+1F7E8 
+🟩
+U+1F7E9 
+🟪
+U+1F7EA 
+🟫
+U+1F7EB 
+⬛
+U+2B1B 
+⬜
+U+2B1C 
+🔲
+U+1F532 
+🔳
+U+1F533
