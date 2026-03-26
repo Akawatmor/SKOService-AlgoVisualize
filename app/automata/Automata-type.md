@@ -13,129 +13,114 @@
 * 🔵 N/A
 
 ### Finite Automata (Type 3)
+### DO NOT DELETE!
 
-* 🟢 Standard Finite Automata
-  * 🟢 Deterministic
-  * 🟢 Non-Deterministic
-  * 🟢 Non-Deterministic with ε-transistion
-* ⚪ Two-Way Deterministic
-  * ⚪ Deterministic
-  * ⚪ Non-Deterministic
-  * ⚪ Non-Deterministic with ε-transistion
-* ⚪ Multi-head Finite Automata
-  * ⚪ Deterministic
-  * ⚪ Non-Deterministic
-  * ⚪ Non-Deterministic with ε-transistion
-* ⚪ Alternating Finite Automata (NFA)
+## Overview
+
+This file tracks automata features planned for the project. The list is grouped by classical Chomsky/automata types and a separate "Other / Advanced" section for ω-automata, timed, probabilistic, and other specialized models.
 
 ---
 
-### Büchi Automata
+## Legend
 
-* ⚪ Deterministic
-* ⚪ Non-Deterministic
-* ⚪ Non-Deterministic with ε-transistion
-
----
-
-### Timed Automata
-
-* ⚪ Deterministic
-* ⚪ Non-Deterministic
-* ⚪ Non-Deterministic with ε-transistion
+- ⚪ To-do / Planned
+- 🟡 In Progress
+- 🟢 Completed
+- 🔴 Cancelled
+- 🔵 N/A
 
 ---
 
-### Push Down Automata (Type 2)
+## Type 3 — Regular languages (Finite Automata)
 
-* 🟢 Deterministic
-* 🟢 Non-Deterministic
-* 🔵 Non-Deterministic with ε-transistion
-
----
-
-### Linear-Bounded Automata (Type 1)
-
-- [ ] Deterministic Linear-Bounded Automata
-- [ ] Non-Deterministic Linear-Bounded Automata
-
----
-
-### Turing Machine (Type 0)
-
-- [x] Deterministic Turing Machine
-- [x] Non-Deterministic Turing Machine
+- 🟢 Standard Finite Automata
+  - 🟢 Deterministic (DFA)
+  - 🟢 Non-Deterministic (NFA)
+  - 🟢 NFA with ε-transitions (ε-NFA)
+- ⚪ Two-way Finite Automata
+  - ⚪ Two-way Deterministic
+  - ⚪ Two-way Non-Deterministic
+- ⚪ Multi-head Finite Automata
+  - ⚪ Deterministic
+  - ⚪ Non-Deterministic
+- ⚪ Alternating Finite Automata
 
 ---
 
+## Type 2 — Context-free languages (Pushdown Automata)
+
+- 🟢 Pushdown Automata (PDA)
+  - 🟢 Deterministic PDA
+  - 🟢 Non-Deterministic PDA
+  - 🔵 ε-moves (handled / N/A depending on model)
+- 🟢 PDA Acceptance Modes
+  - 🟢 Final State Acceptance
+  - 🟢 Empty Stack Acceptance
+  - 🟢 Both (Final State AND Empty Stack)
+
+---
+
+## Type 1 — Context-sensitive languages (Linear-bounded Automata)
+
+- 🟢 Linear-Bounded Automata (LBA)
+  - 🟢 Deterministic LBA
+  - 🟢 Non-Deterministic LBA
+
+---
+
+## Type 0 — Recursively enumerable languages (Turing Machines)
+
+- 🟢 Deterministic Turing Machine (DTM)
+- 🟢 Non-Deterministic Turing Machine (NDTM)
+- 🟢 TM Acceptance Modes
+  - 🟢 Final State Acceptance
+  - 🟢 Halt in Accepting State
+
+---
+
+## ω-Automata, Timed & Other Infinite/Real-time Models
+
+- 🟢 Büchi Automata (ω-automata)
+  - 🟢 Basic simulation on finite prefixes
+  - ⚪ Full cycle detection for infinite word acceptance
+- 🟢 Timed Automata
+  - 🟢 Basic structure with clock constraints
+  - ⚪ Full clock semantics implementation
+
+---
+
+## Transducers, Machines & Variants
+
+- ⚪ Finite State Transducer
+- 🟢 Mealy Machine (output on transitions)
+- 🟢 Moore Machine (output on states)
 
 
-### s
+---
 
+## Probabilistic / Weighted / Advanced Models
 
-- [ ] Hybrid Automata
-- [ ] Register Automata
-- [ ] Probabilistic / Weighted Automata
-- [ ] Rabin Automata / Streett Automata
-- [ ] Parity Automata
-- [ ] Probabilistic Automata
+- ⚪ Probabilistic Automata / Markov Models
+- ⚪ Weighted Automata (max-plus / min-plus)
+- ⚪ Visibly Pushdown Automata
+- ⚪ Quantum Finite Automata
 
-- [ ] Moore Machine
-- [ ] Mealy Machine
-- [ ] Finite State Transducer
+---
 
+## Research / Future / Misc (Scrap)
 
+- ⚪ Hybrid Automata
+- ⚪ Register Automata
+- ⚪ Parity / Rabin / Streett Automata
+- ⚪ Learning Automata
+- ⚪ Hidden Markov Models
 
-- [ ] Weighted Automata
-- [ ] Max-Plus / Min-Plus Automata
-- [ ] Visibly Pushdown Automata
-- [ ] Register Automata
-- [ ] Markov Chain
-- [ ] Hidden Markov Model
+---
 
-- [ ] Hybrid Automata
-- [ ] Quantum Finite Automata
-- [ ] Learning Automata
+### Notes
 
-### Scrap (ref in future)
-🔴
-U+1F534 
-🔵
-U+1F535 
-🟠
-U+1F7E0 
-🟡
-U+1F7E1 
-🟢
-U+1F7E2 
-🟣
-U+1F7E3 
-🟤
-U+1F7E4 
-⚫
-U+26AB 
-⚪
-U+26AA
+- The list above groups models by classical language types first (Type 3 → Type 0), then by specialized families. Use these sections to track implementation status or link to example files in `public/examples` or `app/automata/visualizer/example`.
 
-🟥
-U+1F7E5 
-🟦
-U+1F7E6 
-🟧
-U+1F7E7 
-🟨
-U+1F7E8 
-🟩
-U+1F7E9 
-🟪
-U+1F7EA 
-🟫
-U+1F7EB 
-⬛
-U+2B1B 
-⬜
-U+2B1C 
-🔲
-U+1F532 
-🔳
-U+1F533
+### Emoji / color legend (reference)
+- 🔴 U+1F534  🔵 U+1F535  🟠 U+1F7E0  🟡 U+1F7E1  🟢 U+1F7E2  🟣 U+1F7E3
+- 🟤 U+1F7E4  ⚫ U+26AB  ⚪ U+26AA  🟥 U+1F7E5  🟦 U+1F7E6

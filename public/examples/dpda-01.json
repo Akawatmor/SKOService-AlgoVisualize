@@ -1,0 +1,18 @@
+{
+  "metadata": {
+    "name": "DPDA: Balanced parentheses",
+    "type": "DPDA",
+    "description": "Accepts strings of balanced parentheses using a stack.",
+    "states": 2,
+    "transitions": 3
+  },
+  "nodes": [
+    { "id": "q0", "position": { "x": 200, "y": 200 }, "isStart": true, "isAccept": true, "data": { "layer": 0 } },
+    { "id": "q1", "position": { "x": 500, "y": 200 }, "isStart": false, "isAccept": false, "data": { "layer": 0 } }
+  ],
+  "edges": [
+    { "from": "q0", "to": "q0", "label": "(, Z₀/AZ₀ ; (, A/AA" },
+    { "from": "q0", "to": "q0", "label": "), A/ε" },
+    { "from": "q0", "to": "q1", "label": "), Z₀/Z₀" }
+  ]
+}
