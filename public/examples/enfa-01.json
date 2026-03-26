@@ -1,0 +1,20 @@
+{
+  "metadata": {
+    "name": "ε-NFA: a*b* via epsilon",
+    "type": "ε-NFA",
+    "description": "Accepts a*b* using epsilon transitions between the a-part and the b-part.",
+    "states": 3,
+    "transitions": 4
+  },
+  "nodes": [
+    { "id": "q0", "position": { "x": 100, "y": 200 }, "isStart": true, "isAccept": false, "data": { "layer": 0 } },
+    { "id": "q1", "position": { "x": 400, "y": 200 }, "isStart": false, "isAccept": false, "data": { "layer": 0 } },
+    { "id": "q2", "position": { "x": 700, "y": 200 }, "isStart": false, "isAccept": true, "data": { "layer": 0 } }
+  ],
+  "edges": [
+    { "from": "q0", "to": "q0", "label": "a" },
+    { "from": "q0", "to": "q1", "label": "ε" },
+    { "from": "q1", "to": "q1", "label": "b" },
+    { "from": "q1", "to": "q2", "label": "ε" }
+  ]
+}

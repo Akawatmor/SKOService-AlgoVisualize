@@ -1,0 +1,42 @@
+[
+  {
+    "file": "dfa-01.json",
+    "name": "DFA: Strings ending with 'ab'",
+    "type": "DFA",
+    "description": "Accepts all strings over {a,b} that end with 'ab'.",
+    "states": 3,
+    "transitions": 6
+  },
+  {
+    "file": "nfa-01.json",
+    "name": "NFA: Contains 'aba'",
+    "type": "NFA",
+    "description": "Accepts strings over {a,b} that contain the substring 'aba'.",
+    "states": 4,
+    "transitions": 5
+  },
+  {
+    "file": "enfa-01.json",
+    "name": "ε-NFA: a*b* via epsilon",
+    "type": "ε-NFA",
+    "description": "Accepts a*b* using epsilon transitions between the a-part and the b-part.",
+    "states": 3,
+    "transitions": 4
+  },
+  {
+    "file": "dpda-01.json",
+    "name": "DPDA: Balanced parentheses",
+    "type": "DPDA",
+    "description": "Accepts strings of balanced parentheses using a stack.",
+    "states": 2,
+    "transitions": 3
+  },
+  {
+    "file": "dtm-01.json",
+    "name": "DTM: Binary string equality",
+    "type": "DTM",
+    "description": "Checks if a binary string before '#' matches the one after '#' symbol by symbol.",
+    "states": 9,
+    "transitions": 17
+  }
+]

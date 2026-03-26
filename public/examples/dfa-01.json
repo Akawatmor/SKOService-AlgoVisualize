@@ -1,0 +1,22 @@
+{
+  "metadata": {
+    "name": "DFA: Strings ending with 'ab'",
+    "type": "DFA",
+    "description": "Accepts all strings over {a,b} that end with 'ab'.",
+    "states": 3,
+    "transitions": 6
+  },
+  "nodes": [
+    { "id": "q0", "position": { "x": 100, "y": 200 }, "isStart": true, "isAccept": false, "data": { "layer": 0 } },
+    { "id": "q1", "position": { "x": 350, "y": 200 }, "isStart": false, "isAccept": false, "data": { "layer": 0 } },
+    { "id": "q2", "position": { "x": 600, "y": 200 }, "isStart": false, "isAccept": true, "data": { "layer": 0 } }
+  ],
+  "edges": [
+    { "from": "q0", "to": "q0", "label": "b" },
+    { "from": "q0", "to": "q1", "label": "a" },
+    { "from": "q1", "to": "q1", "label": "a" },
+    { "from": "q1", "to": "q2", "label": "b" },
+    { "from": "q2", "to": "q0", "label": "b" },
+    { "from": "q2", "to": "q1", "label": "a" }
+  ]
+}
