@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowRight, BrainCircuit, GitBranch, Network, Bot } from 'lucide-react';
+import { ArrowRight, Lock, GitBranch, Network, Bot, ArrowUpDown, Search } from 'lucide-react';
 
 const categories = [
   {
@@ -15,36 +15,54 @@ const categories = [
     badge: 'Available',
   },
   {
-    title: 'ML Visualize',
-    description: 'Interactive tools for machine learning concepts, starting with neural network design.',
-    href: '/ml',
-    icon: Bot,
+    title: 'Sorting Algorithms',
+    description: 'Visualize and compare 18+ sorting algorithms with step-by-step animations.',
+    href: '/sorting',
+    icon: ArrowUpDown,
+    color: 'text-amber-400 group-hover:text-amber-300',
+    bg: 'bg-amber-500/10 group-hover:bg-amber-500/20',
+    border: 'border-amber-500/20 hover:border-amber-500/40',
+    badge: 'Available',
+  },
+  {
+    title: 'Search Algorithms',
+    description: 'Explore searching algorithms and hash table implementations with visualizations.',
+    href: '/search',
+    icon: Search,
     color: 'text-cyan-400 group-hover:text-cyan-300',
     bg: 'bg-cyan-500/10 group-hover:bg-cyan-500/20',
     border: 'border-cyan-500/20 hover:border-cyan-500/40',
     badge: 'Available',
   },
   {
-    title: 'Tree',
-    description: 'Tree algorithms and interactive traversal visualizations (coming soon).',
-    href: '#',
+    title: 'Tree Structures',
+    description: 'Visualize Binary Trees, BST, AVL, and Red-Black Trees with operations.',
+    href: '/tree',
     icon: GitBranch,
-    color: 'text-emerald-400',
-    bg: 'bg-emerald-500/10',
-    border: 'border-emerald-500/20',
-    badge: 'Coming soon',
-    disabled: true,
+    color: 'text-emerald-400 group-hover:text-emerald-300',
+    bg: 'bg-emerald-500/10 group-hover:bg-emerald-500/20',
+    border: 'border-emerald-500/20 hover:border-emerald-500/40',
+    badge: 'Available',
   },
   {
-    title: 'Cryptography',
-    description: 'Cryptography concepts and algorithm visual tools (coming soon).',
-    href: '#',
-    icon: BrainCircuit,
-    color: 'text-purple-400',
-    bg: 'bg-purple-500/10',
-    border: 'border-purple-500/20',
-    badge: 'Coming soon',
-    disabled: true,
+    title: 'Cipher Visualizer',
+    description: 'Explore classical and modern encryption techniques with interactive tools.',
+    href: '/cipher',
+    icon: Lock,
+    color: 'text-violet-400 group-hover:text-violet-300',
+    bg: 'bg-violet-500/10 group-hover:bg-violet-500/20',
+    border: 'border-violet-500/20 hover:border-violet-500/40',
+    badge: 'Available',
+  },
+  {
+    title: 'ML Visualize',
+    description: 'Interactive tools for machine learning concepts, starting with neural network design.',
+    href: '/ml',
+    icon: Bot,
+    color: 'text-pink-400 group-hover:text-pink-300',
+    bg: 'bg-pink-500/10 group-hover:bg-pink-500/20',
+    border: 'border-pink-500/20 hover:border-pink-500/40',
+    badge: 'Available',
   },
 ];
 
@@ -79,13 +97,12 @@ export default function Home() {
             return (
               <Link
                 key={index}
-                href={category.disabled ? '#' : category.href}
+                href={category.href}
                 className={`
                   relative group p-5 sm:p-6 rounded-2xl border transition-all duration-300 overflow-hidden backdrop-blur-sm
                   ${category.border} ${category.bg}
-                  ${category.disabled ? 'cursor-not-allowed opacity-70' : 'hover:-translate-y-1 hover:shadow-2xl hover:shadow-black/30'}
+                  hover:-translate-y-1 hover:shadow-2xl hover:shadow-black/30
                 `}
-                aria-disabled={category.disabled}
               >
                 <div className="relative z-10 flex flex-col h-full gap-4">
                   <div className="flex items-start justify-between">
@@ -108,12 +125,10 @@ export default function Home() {
                     </p>
                   </div>
 
-                  {!category.disabled && (
-                    <div className="mt-auto pt-4 flex items-center text-sm font-medium text-slate-500 group-hover:text-white transition-colors">
-                      Open Category
-                      <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
-                    </div>
-                  )}
+                  <div className="mt-auto pt-4 flex items-center text-sm font-medium text-slate-500 group-hover:text-white transition-colors">
+                    Open Category
+                    <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+                  </div>
                 </div>
               </Link>
             );

@@ -1,0 +1,242 @@
+{
+  "metadata": {
+    "name": "DTM: Binary string equality checker",
+    "type": "DTM",
+    "description": "Checks if a binary string before '#' matches the one after '#' symbol by symbol.",
+    "states": 9,
+    "transitions": 17,
+    "exportedAt": "2026-02-27T18:22:55.625Z"
+  },
+  "nodes": [
+    {
+      "id": "q0",
+      "position": {
+        "x": 250.02974105599992,
+        "y": 273.2553881599999
+      },
+      "isStart": true,
+      "isAccept": false,
+      "data": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "q1",
+      "position": {
+        "x": 182.33280000000002,
+        "y": -45.38559999999997
+      },
+      "isStart": false,
+      "isAccept": false,
+      "data": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "q2",
+      "position": {
+        "x": 361.84,
+        "y": -48.495999999999974
+      },
+      "isStart": false,
+      "isAccept": false,
+      "data": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "q3",
+      "position": {
+        "x": 169.39520000000005,
+        "y": 40.6688
+      },
+      "isStart": false,
+      "isAccept": false,
+      "data": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "q4",
+      "position": {
+        "x": 324.2784,
+        "y": 65.55199999999999
+      },
+      "isStart": false,
+      "isAccept": false,
+      "data": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "q5",
+      "position": {
+        "x": 499.76800000000003,
+        "y": 145.38559999999995
+      },
+      "isStart": false,
+      "isAccept": false,
+      "data": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "q6",
+      "position": {
+        "x": 117.392,
+        "y": 157.1904
+      },
+      "isStart": false,
+      "isAccept": false,
+      "data": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "q7",
+      "position": {
+        "x": 128.219387904,
+        "y": 289.7554821119999
+      },
+      "isStart": false,
+      "isAccept": true,
+      "data": {
+        "layer": 0
+      }
+    },
+    {
+      "id": "q8",
+      "position": {
+        "x": 490.4031999999999,
+        "y": 319.9679999999999
+      },
+      "isStart": false,
+      "isAccept": false,
+      "data": {
+        "layer": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "q0",
+      "from_con": "R",
+      "to": "q1",
+      "to_con": "L",
+      "label": "0->X,R"
+    },
+    {
+      "from": "q0",
+      "from_con": "R",
+      "to": "q3",
+      "to_con": "L",
+      "label": "1->X,R"
+    },
+    {
+      "from": "q0",
+      "from_con": "R",
+      "to": "q6",
+      "to_con": "L",
+      "label": "#->#,R"
+    },
+    {
+      "from": "q1",
+      "from_con": "L",
+      "to": "q1",
+      "to_con": "T",
+      "label": "0->0,R; 1->1,R"
+    },
+    {
+      "from": "q1",
+      "from_con": "R",
+      "to": "q2",
+      "to_con": "L",
+      "label": "#->#,R"
+    },
+    {
+      "from": "q2",
+      "from_con": "T",
+      "to": "q2",
+      "to_con": "R",
+      "label": "X->X,R"
+    },
+    {
+      "from": "q2",
+      "from_con": "B",
+      "to": "q5",
+      "to_con": "T",
+      "label": "0->X,L"
+    },
+    {
+      "from": "q3",
+      "from_con": "T",
+      "to": "q3",
+      "to_con": "R",
+      "label": "0->0,R; 1->1,R"
+    },
+    {
+      "from": "q3",
+      "from_con": "R",
+      "to": "q4",
+      "to_con": "L",
+      "label": "#->#,R"
+    },
+    {
+      "from": "q4",
+      "from_con": "T",
+      "to": "q4",
+      "to_con": "R",
+      "label": "X->X,R"
+    },
+    {
+      "from": "q4",
+      "from_con": "R",
+      "to": "q5",
+      "to_con": "L",
+      "label": "1->X,L"
+    },
+    {
+      "from": "q5",
+      "from_con": "T",
+      "to": "q5",
+      "to_con": "R",
+      "label": "0->0,L; 1->1,L; X->X,L"
+    },
+    {
+      "from": "q6",
+      "from_con": "L",
+      "to": "q6",
+      "to_con": "T",
+      "label": "X->X,R"
+    },
+    {
+      "from": "q6",
+      "from_con": "B",
+      "to": "q7",
+      "to_con": "T",
+      "label": "B->B,L"
+    },
+    {
+      "from": "q5",
+      "from_con": "B",
+      "to": "q8",
+      "to_con": "T",
+      "label": "#->#,L"
+    },
+    {
+      "from": "q8",
+      "from_con": "T",
+      "to": "q8",
+      "to_con": "R",
+      "label": "0->0,L; 1->1,L"
+    },
+    {
+      "from": "q8",
+      "from_con": "L",
+      "to": "q0",
+      "to_con": "R",
+      "label": "X->X,R"
+    }
+  ],
+  "annotations": []
+}

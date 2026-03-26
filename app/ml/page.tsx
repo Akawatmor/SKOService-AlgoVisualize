@@ -6,23 +6,43 @@ import { ArrowRight, Bot, Network, MoreHorizontal, ArrowLeft, Home } from 'lucid
 const tools = [
   {
     title: 'Neural Network Builder',
-    description: 'Design a feed-forward neural network architecture and inspect model size.',
+    description: 'Design and train feed-forward neural networks with custom layers and backpropagation.',
     href: '/ml/neural-network',
     icon: Network,
     color: 'text-cyan-400 group-hover:text-cyan-300',
     bg: 'bg-cyan-500/10 group-hover:bg-cyan-500/20',
     border: 'border-cyan-500/20 hover:border-cyan-500/40',
-    badge: 'Current',
+    badge: 'Interactive',
   },
   {
-    title: 'Coming Soon',
-    description: 'More ML visual tools will be added in upcoming updates.',
-    href: '#',
-    icon: MoreHorizontal,
-    color: 'text-gray-400',
-    bg: 'bg-gray-800/50',
-    border: 'border-gray-800',
-    disabled: true,
+    title: 'Decision Tree',
+    description: 'Build decision trees using ID3 and Gini index algorithms.',
+    href: '/ml/decision-tree',
+    icon: Bot,
+    color: 'text-green-400 group-hover:text-green-300',
+    bg: 'bg-green-500/10 group-hover:bg-green-500/20',
+    border: 'border-green-500/20 hover:border-green-500/40',
+    badge: 'Interactive',
+  },
+  {
+    title: 'Performance Metrics',
+    description: 'Calculate classification metrics: Precision, Recall, F1, Accuracy and more.',
+    href: '/ml/metrics',
+    icon: Bot,
+    color: 'text-purple-400 group-hover:text-purple-300',
+    bg: 'bg-purple-500/10 group-hover:bg-purple-500/20',
+    border: 'border-purple-500/20 hover:border-purple-500/40',
+    badge: 'Interactive',
+  },
+  {
+    title: 'K-NN Classifier',
+    description: 'Classify data points using K-Nearest Neighbors with distance calculation.',
+    href: '/ml/knn',
+    icon: Network,
+    color: 'text-orange-400 group-hover:text-orange-300',
+    bg: 'bg-orange-500/10 group-hover:bg-orange-500/20',
+    border: 'border-orange-500/20 hover:border-orange-500/40',
+    badge: 'Interactive',
   },
 ];
 
@@ -72,13 +92,12 @@ export default function MLHome() {
             return (
               <Link
                 key={index}
-                href={tool.disabled ? '#' : tool.href}
+                href={tool.href}
                 className={`
                   relative group p-5 sm:p-6 rounded-2xl border transition-all duration-300 overflow-hidden backdrop-blur-sm
                   ${tool.border} ${tool.bg}
-                  ${tool.disabled ? 'cursor-not-allowed opacity-60' : 'hover:-translate-y-1 hover:shadow-2xl hover:shadow-black/30'}
+                  hover:-translate-y-1 hover:shadow-2xl hover:shadow-black/30
                 `}
-                aria-disabled={tool.disabled}
               >
                 <div className="relative z-10 flex flex-col h-full gap-4">
                   <div className="flex items-start justify-between">
@@ -101,12 +120,10 @@ export default function MLHome() {
                     </p>
                   </div>
 
-                  {!tool.disabled && (
-                    <div className="mt-auto pt-4 flex items-center text-sm font-medium text-slate-500 group-hover:text-white transition-colors">
-                      Launch Tool
-                      <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
-                    </div>
-                  )}
+                  <div className="mt-auto pt-4 flex items-center text-sm font-medium text-slate-500 group-hover:text-white transition-colors">
+                    Launch Tool
+                    <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+                  </div>
                 </div>
               </Link>
             );
