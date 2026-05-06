@@ -45,9 +45,7 @@ export const getSiteUrl = () =>
   normalizeSiteUrl(
     process.env.NEXT_PUBLIC_SITE_URL ??
       process.env.SITE_URL ??
-      process.env.CF_PAGES_BRANCH_URL ??
-      process.env.CF_PAGES_URL ??
-      process.env.VERCEL_URL
+      SITE_URL
   );
 
 export const absoluteUrl = (path = "/") => new URL(path, `${getSiteUrl()}/`).toString();
