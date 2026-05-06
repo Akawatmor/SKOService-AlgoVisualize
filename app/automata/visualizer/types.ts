@@ -13,8 +13,25 @@ export type ModeType =
 /** PDA acceptance criteria */
 export type PdaAcceptMode = 'final-state' | 'empty-stack' | 'both';
 
+/** Optional PDA storage models layered on top of the classic single-stack machine. */
+export type PdaStorageModel = 'stack' | 'queue' | 'nested-stack';
+
+export type PdaVariant = 'classic' | 'multi-stack' | 'nested-stack' | 'queue';
+
+export type PdaSettings = {
+  stackCount: number;
+  storageModel: PdaStorageModel;
+  variant: PdaVariant;
+};
+
 /** TM acceptance criteria */
 export type TmAcceptMode = 'final-state' | 'halt';
+
+/** How the initial input should be placed on tapes before simulation starts. */
+export type TmInputMode = 'textbook' | 'machine';
+
+/** Optional TM extensions layered on top of the classic tape model. */
+export type TmSheetMode = 'linear' | 'sheet-2d';
 
 // ─── Node data shapes ───
 
@@ -50,6 +67,7 @@ export type FrameBoxNodeData = {
 
 export interface ImportNode {
   id: string;
+  label?: string;
   position?: { x: number; y: number };
   isStart?: boolean;
   isAccept?: boolean;
@@ -88,8 +106,15 @@ export interface ImportData {
   metadata?: { 
     type?: ModeType;
     pdaAcceptMode?: PdaAcceptMode;
+    pdaSettings?: PdaSettings;
     tmAcceptMode?: TmAcceptMode;
+    tmSettings?: TmSettings;
   };
+  type?: ModeType;
+  pdaAcceptMode?: PdaAcceptMode;
+  pdaSettings?: PdaSettings;
+  tmAcceptMode?: TmAcceptMode;
+  tmSettings?: TmSettings;
   nodes: ImportNode[];
   edges: ImportEdge[];
   annotations?: ImportAnnotation[];
@@ -97,40 +122,80 @@ export interface ImportData {
 
 // ─── PDA / TM rule types ───
 
-export type PdaRule = { input: string; pop: string; push: string };
-export type PdaConfig = { state: string; stack: string[] };
+export type PdaRule = {
+  input: string;
+  pop: string;
+  push: string;
+  pops?: string[];
+  pushes?: string[];
+};
 
-/** TM move direction */
-export type TmMove = 'L' | 'R' | 'S';
+export type PdaConfig = {
+  state: string;
+  stack: string[];
+  stacks?: string[][];
+  storageModel?: PdaStorageModel;
+};
 
-/** 
- * TM transition rule supporting multi-tape.
- * For single tape: reads[0], writes[0], moves[0]
- * For multi-tape: reads[i] for tape i, etc.
+/** TM move direction / addressing operation */
+export type TmMove = 'L' | 'R' | 'S' | 'U' | 'D' | `@${number}`;
+
+/**
+ * TM transition rule supporting multi-head execution.
+ * Each tuple slot corresponds to a head in head order.
  */
 export type TmRule = { 
-  reads: string[];    // Symbol to read from each tape
-  writes: string[];   // Symbol to write to each tape
-  moves: TmMove[];    // Direction to move each head
+  reads: string[];
+  writes: string[];
+  moves: TmMove[];
 };
 
 /** 
  * TM configuration supporting multi-tape/multi-head.
  * - tapes: Array of tapes, each tape is string[]
- * - heads: Position of each head (heads[i] is on tape headToTape[i] or tape i by default)
+ * - heads: Position of each head (heads[i] is on tape headToTape[i])
  */
 export type TmConfig = { 
   state: string; 
-  tapes: string[][];  // Multiple tapes
-  heads: number[];    // Head positions (one per head)
+  tapes: string[][];
+  heads: number[];
 };
 
 /** TM settings for multi-tape/multi-head configuration */
 export type TmSettings = {
-  tapeCount: number;      // Number of tapes (default 1)
-  headCount: number;      // Number of heads (default 1)
-  headToTape: number[];   // Maps head index to tape index (headToTape[i] = tape that head i operates on)
+  tapeCount: number;
+  headCount: number;
+  /** Legacy single-track mapping: one primary track per head. */
+  headToTape: number[];
+  /** Full mapping: each head can access one or more tracks at the same head position. */
+  headTrackMap: number[][];
+  inputMode: TmInputMode;
+  sheetMode: TmSheetMode;
+  sheetColumns: number;
+  ramEnabled: boolean;
+  stateStorageEnabled: boolean;
 };
+
+export interface PdaPathNode {
+  id: string;
+  parentId: string | null;
+  stepIndex: number;
+  state: string;
+  stack: string[];
+  stacks?: string[][];
+  storageModel?: PdaStorageModel;
+  transitionLabel?: string;
+}
+
+export interface TmPathNode {
+  id: string;
+  parentId: string | null;
+  stepIndex: number;
+  state: string;
+  tapes: string[][];
+  heads: number[];
+  transitionLabel?: string;
+}
 
 // ─── Mealy / Moore types ───
 
@@ -161,6 +226,10 @@ export interface SimSnapshot {
   activeStates: string[];
   pdaConfigs: PdaConfig[];
   tmConfigs: TmConfig[];
+  pdaPathConfigs?: PdaConfig[];
+  tmPathConfigs?: TmConfig[];
+  pdaPathNodes?: PdaPathNode[];
+  tmPathNodes?: TmPathNode[];
   simMessage: string;
   history: string[];
 }

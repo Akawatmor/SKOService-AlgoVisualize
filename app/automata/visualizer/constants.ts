@@ -3,6 +3,12 @@
 /** Initial symbol at the bottom of the PDA stack. */
 export const PDA_STACK_START = 'Z';
 
+/** Default number of PDA stacks. */
+export const PDA_DEFAULT_STACK_COUNT = 1;
+
+/** Maximum number of PDA stacks allowed in k-PDA mode. */
+export const PDA_MAX_STACKS = 20;
+
 /** Maximum depth the PDA stack can reach before a configuration is pruned. */
 export const PDA_MAX_STACK_DEPTH = 30;
 

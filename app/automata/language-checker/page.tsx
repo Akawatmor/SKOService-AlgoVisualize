@@ -881,8 +881,8 @@ function RELTrace({ configs, halted, error }: { configs: TMConfig[]; halted: boo
           <div key={idx} className={`rounded border px-3 py-2 text-xs ${idx === configs.length - 1 ? 'border-blue-800/50 bg-blue-950/20' : 'border-slate-800/50 bg-slate-900/30'}`}>
             <div className="flex items-center gap-2 mb-1">
               <span className="text-slate-500 w-6 shrink-0">{idx}</span>
-              <span className="bg-slate-800 text-slate-200 px-2 py-0.5 rounded text-[10px] font-bold">{cfg.state}</span>
-              <span className="text-slate-500 text-[10px]">{cfg.note}</span>
+              <span className="bg-slate-800 text-slate-200 px-2 py-0.5 rounded text-[10px] font-bold font-thai">{cfg.state}</span>
+              <span className="text-slate-500 text-[10px] font-thai">{cfg.note}</span>
             </div>
             <div className="flex items-center gap-0.5 overflow-x-auto">
               {cfg.tape.map((sym, ti) => (

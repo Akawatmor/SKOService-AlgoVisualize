@@ -423,8 +423,8 @@ export default function SubstitutionCiphersPage() {
         {/* Tips Section */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5 backdrop-blur-sm">
-            <div className="text-violet-400 font-bold mb-2">🔐 Security Note</div>
-            <div className="text-sm text-slate-400 leading-relaxed">
+            <div className="text-violet-400 font-bold mb-2 font-thai">🔐 Security Note</div>
+            <div className="text-sm text-slate-400 leading-relaxed font-thai">
               All substitution ciphers are vulnerable to frequency analysis and should not be used for real security.
             </div>
           </div>

@@ -1,7 +1,26 @@
 // ─── Automata Visualizer — Pure Utility Functions ───
 import type { Edge } from '@xyflow/react';
-import type { ModeType, PdaRule, PdaConfig, TmRule, MealyRule, ClockConstraint, TimedRule } from './types';
-import { PDA_STACK_START, PDA_MAX_STACK_DEPTH, PDA_MAX_EPSILON_EXPANSIONS, TM_BLANK } from './constants';
+import type {
+  ModeType,
+  PdaRule,
+  PdaConfig,
+  PdaSettings,
+  PdaStorageModel,
+  TmRule,
+  MealyRule,
+  ClockConstraint,
+  TimedRule,
+} from './types';
+import {
+  PDA_DEFAULT_STACK_COUNT,
+  PDA_MAX_STACK_DEPTH,
+  PDA_MAX_EPSILON_EXPANSIONS,
+  PDA_MAX_STACKS,
+  PDA_STACK_START,
+  TM_BLANK,
+} from './constants';
+
+const TM_SIMPLE_MOVES = new Set(['L', 'R', 'S', 'U', 'D']);
 
 // ────────────────────────────────────────────
 // Epsilon & symbol helpers
@@ -85,67 +104,378 @@ export const buildDisplaySubHandleMap = (edgeList: Edge[]) => {
   return out;
 };
 
+const findRuleSeparator = (ruleText: string): { index: number; length: number } | null => {
+  const arrowIdx = ruleText.indexOf('->');
+  if (arrowIdx >= 0) return { index: arrowIdx, length: 2 };
+  const slashIdx = ruleText.indexOf('/');
+  if (slashIdx >= 0) return { index: slashIdx, length: 1 };
+  return null;
+};
+
+const normalizePdaStackSymbolAliases = (value: string): string => {
+  return value.replace(/Z₀|Z0/g, PDA_STACK_START);
+};
+
 // ────────────────────────────────────────────
 // PDA rule parsing & helpers
 // ────────────────────────────────────────────
 
-export const parsePdaRules = (label?: string): PdaRule[] => {
+const clampPdaStackCount = (value: number): number => {
+  if (!Number.isFinite(value)) return PDA_DEFAULT_STACK_COUNT;
+  return Math.min(PDA_MAX_STACKS, Math.max(PDA_DEFAULT_STACK_COUNT, Math.round(value)));
+};
+
+const removeInlineWhitespace = (value: string) => value.replace(/\s+/g, '');
+
+const splitTopLevel = (value: string, separator: string): string[] => {
+  const parts: string[] = [];
+  let current = '';
+  let parenDepth = 0;
+  let bracketDepth = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === '(') parenDepth += 1;
+    if (char === ')') parenDepth = Math.max(0, parenDepth - 1);
+    if (char === '[') bracketDepth += 1;
+    if (char === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+
+    if (char === separator && parenDepth === 0 && bracketDepth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+
+  parts.push(current);
+  return parts;
+};
+
+const tokenizeNestedStackSymbols = (value: string): string[] | null => {
+  const compact = removeInlineWhitespace(value);
+  if (!compact) return [];
+
+  const tokens: string[] = [];
+  let index = 0;
+
+  while (index < compact.length) {
+    if (compact[index] !== '[') {
+      tokens.push(compact[index]);
+      index += 1;
+      continue;
+    }
+
+    let depth = 1;
+    let cursor = index + 1;
+    while (cursor < compact.length && depth > 0) {
+      if (compact[cursor] === '[') depth += 1;
+      if (compact[cursor] === ']') depth -= 1;
+      cursor += 1;
+    }
+
+    if (depth !== 0) return null;
+    tokens.push(compact.slice(index, cursor));
+    index = cursor;
+  }
+
+  return tokens;
+};
+
+const tokenizePdaStoreSymbols = (
+  value: string,
+  storageModel: PdaStorageModel,
+): string[] | null => {
+  const normalized = normalizePdaStackSymbolAliases(normalizeEpsilonSymbol(removeInlineWhitespace(value)));
+  if (!normalized || normalized === 'ε') return [];
+  if (storageModel === 'nested-stack') {
+    return tokenizeNestedStackSymbols(normalized);
+  }
+  return normalized.split('');
+};
+
+const parsePdaOperandList = (
+  rawValue: string,
+  expectedCount: number,
+): string[] | null => {
+  const trimmed = rawValue.trim();
+  if (!trimmed) return null;
+
+  const parseSingleOperand = (value: string) => {
+    const normalized = normalizePdaStackSymbolAliases(normalizeEpsilonSymbol(removeInlineWhitespace(value)));
+    return normalized || null;
+  };
+
+  if (expectedCount <= 1) {
+    if (trimmed.startsWith('(') && trimmed.endsWith(')')) {
+      const tupleItems = splitTopLevel(trimmed.slice(1, -1), ',').map((item) => item.trim());
+      if (tupleItems.length !== 1) return null;
+      const singleValue = parseSingleOperand(tupleItems[0]);
+      return singleValue ? [singleValue] : null;
+    }
+    const singleValue = parseSingleOperand(trimmed);
+    return singleValue ? [singleValue] : null;
+  }
+
+  if (!trimmed.startsWith('(') || !trimmed.endsWith(')')) return null;
+  const tupleItems = splitTopLevel(trimmed.slice(1, -1), ',').map((item) => item.trim());
+  if (tupleItems.length !== expectedCount) return null;
+
+  const normalizedItems = tupleItems.map(parseSingleOperand);
+  if (normalizedItems.some((item) => item === null)) return null;
+  return normalizedItems as string[];
+};
+
+const normalizeStoresForSettings = (
+  stores: string[][],
+  settings: PdaSettings,
+): string[][] => {
+  const expectedCount = settings.storageModel === 'stack' ? settings.stackCount : 1;
+  const normalized = stores.slice(0, expectedCount).map((store) => [...store]);
+  while (normalized.length < expectedCount) {
+    normalized.push([PDA_STACK_START]);
+  }
+  return normalized;
+};
+
+export const normalizePdaSettings = (settings?: Partial<PdaSettings> | null): PdaSettings => {
+  const requestedModel = settings?.storageModel;
+  const requestedVariant = settings?.variant;
+
+  if (requestedModel === 'queue' || requestedVariant === 'queue') {
+    return {
+      stackCount: 1,
+      storageModel: 'queue',
+      variant: 'queue',
+    };
+  }
+
+  if (requestedModel === 'nested-stack' || requestedVariant === 'nested-stack') {
+    return {
+      stackCount: 1,
+      storageModel: 'nested-stack',
+      variant: 'nested-stack',
+    };
+  }
+
+  const stackCount = clampPdaStackCount(Number(settings?.stackCount ?? PDA_DEFAULT_STACK_COUNT));
+  return {
+    stackCount: stackCount > 1 ? stackCount : 1,
+    storageModel: 'stack',
+    variant: stackCount > 1 ? 'multi-stack' : 'classic',
+  };
+};
+
+export const getPdaStoreCount = (settings?: Partial<PdaSettings> | null) => {
+  const normalized = normalizePdaSettings(settings);
+  return normalized.storageModel === 'stack' ? normalized.stackCount : 1;
+};
+
+export const getPdaConfigStores = (
+  cfg: PdaConfig,
+  settings?: Partial<PdaSettings> | null,
+): string[][] => {
+  const normalizedSettings = normalizePdaSettings(settings);
+  const fallbackStack = Array.isArray(cfg.stack) ? [...cfg.stack] : [];
+  const sourceStores = Array.isArray(cfg.stacks) && cfg.stacks.length > 0
+    ? cfg.stacks.map((store) => [...store])
+    : [fallbackStack];
+  return normalizeStoresForSettings(sourceStores, normalizedSettings);
+};
+
+export const buildPdaConfig = (
+  state: string,
+  stores: string[][],
+  settings?: Partial<PdaSettings> | null,
+): PdaConfig => {
+  const normalizedSettings = normalizePdaSettings(settings);
+  const normalizedStores = normalizeStoresForSettings(stores, normalizedSettings);
+  return {
+    state,
+    stack: [...(normalizedStores[0] || [])],
+    stacks: normalizedStores.map((store) => [...store]),
+    storageModel: normalizedSettings.storageModel,
+  };
+};
+
+export const getPdaConfigKey = (
+  cfg: PdaConfig,
+  settings?: Partial<PdaSettings> | null,
+): string => {
+  const stores = getPdaConfigStores(cfg, settings);
+  return `${cfg.state}|${stores.map((store) => store.join('\u0001')).join('\u0002')}`;
+};
+
+export const isPdaStoreEmpty = (
+  cfg: PdaConfig,
+  settings?: Partial<PdaSettings> | null,
+): boolean => {
+  return getPdaConfigStores(cfg, settings).every(
+    (store) => store.length === 0 || (store.length === 1 && store[0] === PDA_STACK_START)
+  );
+};
+
+export const formatPdaStoreContents = (
+  store: string[],
+  settings?: Partial<PdaSettings> | null,
+): string => {
+  const normalizedSettings = normalizePdaSettings(settings);
+  if (store.length === 0) return 'ε';
+  if (normalizedSettings.storageModel === 'queue') return store.join(' ');
+  if (normalizedSettings.storageModel === 'nested-stack') return store.join(' ');
+  return store.join('');
+};
+
+export const formatPdaExtensionSummary = (settings?: Partial<PdaSettings> | null): string => {
+  const normalized = normalizePdaSettings(settings);
+  if (normalized.storageModel === 'queue') return 'Queue automata';
+  if (normalized.storageModel === 'nested-stack') return 'Nested stack automata';
+  if (normalized.stackCount === 2) return 'Two-stack PDA';
+  if (normalized.stackCount > 2) return `${normalized.stackCount}-stack PDA`;
+  return 'Classic PDA';
+};
+
+export const getDefaultPdaRuleLabel = (settings?: Partial<PdaSettings> | null): string => {
+  const normalized = normalizePdaSettings(settings);
+  const storeCount = getPdaStoreCount(normalized);
+  if (storeCount <= 1) {
+    return `${PDA_STACK_START},${PDA_STACK_START}->${PDA_STACK_START}`;
+  }
+  const tuple = Array.from({ length: storeCount }, (_, index) => (index === 0 ? PDA_STACK_START : 'ε')).join(',');
+  return `${PDA_STACK_START},(${tuple})->(${tuple})`;
+};
+
+export const getPdaRulePromptTitle = (
+  action: 'Input' | 'Edit',
+  settings?: Partial<PdaSettings> | null,
+): string => {
+  const normalized = normalizePdaSettings(settings);
+  const summary = formatPdaExtensionSummary(normalized);
+  if (normalized.storageModel === 'queue') {
+    return `${action} Queue rule(s): input,dequeue->enqueue  •  ${summary}`;
+  }
+  if (normalized.storageModel === 'nested-stack') {
+    return `${action} nested-stack rule(s): input,pop->push  •  use [frame] for nested tokens`;
+  }
+  if (normalized.stackCount > 1) {
+    return `${action} ${normalized.stackCount}-stack rule(s): input,(pop1,...)->(push1,...)`;
+  }
+  return `${action} PDA rule(s): input,pop->push`;
+};
+
+export const parsePdaRules = (
+  label?: string,
+  settings?: Partial<PdaSettings> | null,
+): PdaRule[] => {
   if (!label) return [];
-  return label
+  const normalizedSettings = normalizePdaSettings(settings);
+  const storeCount = getPdaStoreCount(normalizedSettings);
+  const parsed = label
     .split(';')
     .map(s => s.trim())
     .filter(Boolean)
-    .map((ruleText) => {
-      const arrowIdx = ruleText.indexOf('->');
-      if (arrowIdx < 0) return null;
-      const lhs = ruleText.slice(0, arrowIdx).trim();
-      const rhs = ruleText.slice(arrowIdx + 2).trim();
-      const lhsParts = lhs.split(',').map(s => s.trim());
+    .map((ruleText): PdaRule | null => {
+      const separator = findRuleSeparator(ruleText);
+      if (!separator) return null;
+      const lhs = ruleText.slice(0, separator.index).trim();
+      const rhs = ruleText.slice(separator.index + separator.length).trim();
+      const lhsParts = splitTopLevel(lhs, ',').map(s => s.trim());
       if (lhsParts.length !== 2) return null;
       const [inputRaw, popRaw] = lhsParts;
       const input = normalizeEpsilonSymbol(inputRaw);
-      const pop = normalizeEpsilonSymbol(popRaw);
-      const push = normalizeEpsilonSymbol(rhs);
-      if (!input || !pop || !push) return null;
-      return { input, pop, push };
-    })
-    .filter((r): r is PdaRule => r !== null);
+      const pops = parsePdaOperandList(popRaw, storeCount);
+      const pushes = parsePdaOperandList(rhs, storeCount);
+      if (!input || !pops || !pushes) return null;
+      return {
+        input,
+        pop: pops[0],
+        push: pushes[0],
+        pops,
+        pushes,
+      };
+    });
+
+  return parsed.filter((rule): rule is PdaRule => rule !== null);
 };
 
-export const isValidPdaLabel = (label?: string): boolean => {
+export const isValidPdaLabel = (
+  label?: string,
+  settings?: Partial<PdaSettings> | null,
+): boolean => {
   if (!label) return false;
   const chunks = label.split(';').map(s => s.trim()).filter(Boolean);
   if (chunks.length === 0) return false;
-  return parsePdaRules(label).length === chunks.length;
+  return parsePdaRules(label, settings).length === chunks.length;
 };
 
-export const tryConvertNfaShorthandToPda = (raw?: string): string | null => {
+export const tryConvertNfaShorthandToPda = (
+  raw?: string,
+  settings?: Partial<PdaSettings> | null,
+): string | null => {
   if (!raw) return null;
-  if (raw.includes('->')) return null;
+  const normalizedSettings = normalizePdaSettings(settings);
+  if (normalizedSettings.storageModel !== 'stack' || normalizedSettings.stackCount !== 1) {
+    return null;
+  }
+  if (findRuleSeparator(raw)) return null;
   const symbols = raw.split(',').map(s => normalizeEpsilonSymbol(s.trim())).filter(Boolean);
   if (symbols.length === 0) return null;
   return symbols.map(sym => `${sym},${PDA_STACK_START}->${PDA_STACK_START}`).join('; ');
 };
 
-export const applyPdaRule = (cfg: PdaConfig, targetState: string, rule: PdaRule): PdaConfig | null => {
-  const stack = [...cfg.stack];
-  const popSym = normalizeEpsilonSymbol(rule.pop);
-  if (popSym !== 'ε') {
-    const top = stack[stack.length - 1];
-    if (top !== popSym) return null;
-    stack.pop();
+export const applyPdaRule = (
+  cfg: PdaConfig,
+  targetState: string,
+  rule: PdaRule,
+  settings?: Partial<PdaSettings> | null,
+): PdaConfig | null => {
+  const normalizedSettings = normalizePdaSettings(settings);
+  const currentStores = getPdaConfigStores(cfg, normalizedSettings).map((store) => [...store]);
+  const pops = rule.pops && rule.pops.length > 0 ? rule.pops : [rule.pop];
+  const pushes = rule.pushes && rule.pushes.length > 0 ? rule.pushes : [rule.push];
+
+  for (let index = 0; index < currentStores.length; index += 1) {
+    const store = currentStores[index];
+    const popValue = normalizeEpsilonSymbol(pops[index] ?? 'ε');
+    const pushValue = normalizeEpsilonSymbol(pushes[index] ?? 'ε');
+
+    if (popValue !== 'ε') {
+      if (normalizedSettings.storageModel === 'queue') {
+        const front = store[0];
+        if (front !== popValue) return null;
+        store.shift();
+      } else {
+        const top = store[store.length - 1];
+        if (top !== popValue) return null;
+        store.pop();
+      }
+    }
+
+    const pushTokens = tokenizePdaStoreSymbols(pushValue, normalizedSettings.storageModel);
+    if (pushTokens === null) return null;
+    if (pushTokens.length > 0) {
+      if (normalizedSettings.storageModel === 'queue') {
+        pushTokens.forEach((token) => store.push(token));
+      } else {
+        for (let pushIndex = pushTokens.length - 1; pushIndex >= 0; pushIndex -= 1) {
+          store.push(pushTokens[pushIndex]);
+        }
+      }
+    }
+
+    if (store.length > PDA_MAX_STACK_DEPTH) return null;
   }
-  const pushSym = normalizeEpsilonSymbol(rule.push);
-  if (pushSym !== 'ε') {
-    const symbols = pushSym.split('');
-    for (let i = symbols.length - 1; i >= 0; i--) stack.push(symbols[i]);
-  }
-  if (stack.length > PDA_MAX_STACK_DEPTH) return null;
-  return { state: targetState, stack };
+
+  return buildPdaConfig(targetState, currentStores, normalizedSettings);
 };
 
-export const expandPdaEpsilonClosure = (configs: PdaConfig[], currentEdges: Edge[]): PdaConfig[] => {
-  const keyOf = (cfg: PdaConfig) => `${cfg.state}|${cfg.stack.join('')}`;
+export const expandPdaEpsilonClosure = (
+  configs: PdaConfig[],
+  currentEdges: Edge[],
+  settings?: Partial<PdaSettings> | null,
+): PdaConfig[] => {
+  const keyOf = (cfg: PdaConfig) => getPdaConfigKey(cfg, settings);
   const visited = new Set<string>();
   const queue: PdaConfig[] = [];
   const out: PdaConfig[] = [];
@@ -163,9 +493,9 @@ export const expandPdaEpsilonClosure = (configs: PdaConfig[], currentEdges: Edge
     const cfg = queue.shift()!;
     const outgoing = currentEdges.filter(e => e.source === cfg.state);
     outgoing.forEach(edge => {
-      const rules = parsePdaRules(edge.label as string).filter(r => normalizeEpsilonSymbol(r.input) === 'ε');
+      const rules = parsePdaRules(edge.label as string, settings).filter(r => normalizeEpsilonSymbol(r.input) === 'ε');
       rules.forEach(rule => {
-        const next = applyPdaRule(cfg, edge.target, rule);
+        const next = applyPdaRule(cfg, edge.target, rule, settings);
         if (!next) return;
         const key = keyOf(next);
         if (!visited.has(key)) {
@@ -180,13 +510,61 @@ export const expandPdaEpsilonClosure = (configs: PdaConfig[], currentEdges: Edge
   return out;
 };
 
+export const expandPdaEpsilonPaths = (
+  configs: PdaConfig[],
+  currentEdges: Edge[],
+  settings?: Partial<PdaSettings> | null,
+): PdaConfig[] => {
+  const normalizedSettings = normalizePdaSettings(settings);
+  const keyOf = (cfg: PdaConfig) => getPdaConfigKey(cfg, normalizedSettings);
+  const queue = configs.map((cfg) => ({
+    cfg,
+    seen: new Set<string>([keyOf(cfg)]),
+  }));
+  const out = configs.map((cfg) => buildPdaConfig(cfg.state, getPdaConfigStores(cfg, normalizedSettings), normalizedSettings));
+
+  let expansions = 0;
+  while (queue.length > 0 && expansions < PDA_MAX_EPSILON_EXPANSIONS) {
+    const current = queue.shift();
+    if (!current) break;
+
+    const outgoing = currentEdges.filter(e => e.source === current.cfg.state);
+    outgoing.forEach(edge => {
+      const rules = parsePdaRules(edge.label as string, normalizedSettings).filter(r => normalizeEpsilonSymbol(r.input) === 'ε');
+      rules.forEach(rule => {
+        const next = applyPdaRule(current.cfg, edge.target, rule, normalizedSettings);
+        if (!next) return;
+
+        const nextKey = keyOf(next);
+        if (current.seen.has(nextKey)) return;
+
+        out.push(next);
+        const nextSeen = new Set(current.seen);
+        nextSeen.add(nextKey);
+        queue.push({ cfg: next, seen: nextSeen });
+      });
+    });
+
+    expansions += 1;
+  }
+
+  return out;
+};
+
 // ────────────────────────────────────────────
-// TM rule parsing (supports single-tape and multi-tape)
+// TM rule parsing (supports single-head and multi-head tuples)
 // ────────────────────────────────────────────
 
 /** Normalize shorthand blank symbols to the canonical TM_BLANK (□). */
 const normalizeTmSymbol = (s: string): string =>
   s === 'B' || s === '␣' ? TM_BLANK : s;
+
+export const isRamJumpMove = (move: string): boolean => /^@\d+$/.test(move.trim().toUpperCase());
+
+export const isValidTmMove = (move: string): boolean => {
+  const normalized = move.trim().toUpperCase();
+  return TM_SIMPLE_MOVES.has(normalized) || isRamJumpMove(normalized);
+};
 
 /**
  * Parse a parenthesized tuple like "(a,b,c)" into an array ["a","b","c"].
@@ -203,27 +581,27 @@ const parseTuple = (s: string): string[] | null => {
  * Parse TM rules from edge label.
  * Supports two formats:
  * 
- * 1. Single-tape (legacy): "read->write,move" e.g. "0->1,R"
- * 2. Multi-tape: "(r1,r2,...)->(w1,w2,...),(m1,m2,...)" e.g. "(0,1)->(1,0),(R,L)"
+ * 1. Single-head: "read->write,move" e.g. "0->1,R"
+ * 2. Multi-head: "(r1,r2,...)->(w1,w2,...),(m1,m2,...)" e.g. "(0,1)->(1,0),(R,L)"
  * 
  * Multiple rules separated by semicolon.
  */
-export const parseTmRules = (label?: string, expectedTapeCount: number = 1): TmRule[] => {
+export const parseTmRules = (label?: string, expectedArity?: number): TmRule[] => {
   if (!label) return [];
-  return label
+  const parsed = label
     .split(';')
     .map(s => s.trim())
     .filter(Boolean)
     .map((ruleText) => {
-      const arrowIdx = ruleText.indexOf('->');
-      if (arrowIdx < 0) return null;
+      const separator = findRuleSeparator(ruleText);
+      if (!separator) return null;
+
+      const lhs = ruleText.slice(0, separator.index).trim();
+      const rhs = ruleText.slice(separator.index + separator.length).trim();
       
-      const lhs = ruleText.slice(0, arrowIdx).trim();
-      const rhs = ruleText.slice(arrowIdx + 2).trim();
-      
-      // Check if multi-tape format (starts with parenthesis)
+      // Check if multi-head tuple format (starts with parenthesis)
       if (lhs.startsWith('(')) {
-        // Multi-tape format: (r1,r2,...)->(w1,w2,...),(m1,m2,...)
+        // Multi-head format: (r1,r2,...)->(w1,w2,...),(m1,m2,...)
         const reads = parseTuple(lhs);
         if (!reads) return null;
         
@@ -253,12 +631,12 @@ export const parseTmRules = (label?: string, expectedTapeCount: number = 1): TmR
         const moves = movesParsed.map(m => m.toUpperCase());
         
         // Validate moves
-        if (!moves.every(m => m === 'L' || m === 'R' || m === 'S')) return null;
+        if (!moves.every(isValidTmMove)) return null;
         
         return {
           reads: normalizedReads,
           writes: normalizedWrites,
-          moves: moves as ('L' | 'R' | 'S')[],
+          moves,
         };
       } else {
         // Single-tape format (legacy): read->write,move
@@ -268,34 +646,32 @@ export const parseTmRules = (label?: string, expectedTapeCount: number = 1): TmR
         const [writeRaw, moveRaw] = rhsParts;
         const write = normalizeTmSymbol(writeRaw);
         const move = moveRaw.toUpperCase();
-        if (!read || !write || (move !== 'L' && move !== 'R' && move !== 'S')) return null;
+        if (!read || !write || !isValidTmMove(move)) return null;
         
-        // Return in multi-tape format with single element arrays
+        // Return in tuple format with single element arrays
         return { 
           reads: [read], 
           writes: [write], 
-          moves: [move as 'L' | 'R' | 'S'],
+          moves: [move],
         };
       }
     })
     .filter((r): r is TmRule => r !== null);
+
+  if (!expectedArity || expectedArity < 1) return parsed;
+  return parsed.filter((rule) => rule.reads.length === expectedArity);
 };
 
 /**
  * Validate TM label format.
- * Accepts both single-tape and multi-tape formats.
+ * Accepts both single-head and multi-head formats.
  */
-export const isValidTmLabel = (label?: string, expectedTapeCount: number = 1): boolean => {
+export const isValidTmLabel = (label?: string, expectedHeadCount: number = 1): boolean => {
   if (!label) return false;
   const chunks = label.split(';').map(s => s.trim()).filter(Boolean);
   if (chunks.length === 0) return false;
-  const parsed = parseTmRules(label, expectedTapeCount);
+  const parsed = parseTmRules(label, expectedHeadCount);
   if (parsed.length !== chunks.length) return false;
-  
-  // For multi-tape, verify tape count matches expected
-  if (expectedTapeCount > 1) {
-    return parsed.every(rule => rule.reads.length === expectedTapeCount);
-  }
   return true;
 };
 
@@ -393,8 +769,12 @@ export const isValidTimedLabel = (label?: string): boolean => {
 // Label conversion between modes
 // ────────────────────────────────────────────
 
-export const toFaLabelFromPda = (label: string, targetMode: ModeType): string => {
-  const rules = parsePdaRules(label);
+export const toFaLabelFromPda = (
+  label: string,
+  targetMode: ModeType,
+  settings?: Partial<PdaSettings> | null,
+): string => {
+  const rules = parsePdaRules(label, settings);
   if (rules.length === 0) return label;
   const uniqueInputs = Array.from(new Set(rules.map(r => normalizeEpsilonSymbol(r.input))));
   const normalized = targetMode === 'eNFA'
@@ -403,13 +783,22 @@ export const toFaLabelFromPda = (label: string, targetMode: ModeType): string =>
   return normalized.join(',');
 };
 
-export const toPdaLabelFromFa = (label: string): string => {
+export const toPdaLabelFromFa = (
+  label: string,
+  settings?: Partial<PdaSettings> | null,
+): string => {
   const raw = (label || '').trim();
   if (!raw) return '';
-  if (parsePdaRules(raw).length > 0) return raw;
+  if (parsePdaRules(raw, settings).length > 0) return raw;
   const symbols = raw.split(',').map(s => normalizeEpsilonSymbol(s.trim())).filter(Boolean);
   if (symbols.length === 0) return '';
-  return symbols.map(sym => `${sym},${PDA_STACK_START}->${PDA_STACK_START}`).join('; ');
+  const defaultRule = getDefaultPdaRuleLabel(settings);
+  if (getPdaStoreCount(settings) <= 1) {
+    return symbols.map(sym => `${sym},${PDA_STACK_START}->${PDA_STACK_START}`).join('; ');
+  }
+  return symbols
+    .map((sym) => defaultRule.replace(PDA_STACK_START, sym))
+    .join('; ');
 };
 
 export const toTmLabelFromFa = (label: string): string => {
