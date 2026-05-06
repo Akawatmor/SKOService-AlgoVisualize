@@ -55,6 +55,11 @@ import {
   VISUALIZER_DRAFT_KEY,
 } from "./constants";
 
+import {
+  buildAutomataShareUrl,
+  VISUALIZER_SHARED_IMPORT_KEY,
+} from "./shareUrl";
+
 import { nodeTypes } from "./customNodes";
 
 import {
@@ -456,6 +461,7 @@ function AutomataEditor() {
   const historyRef = useRef(history);
   const playbackSpeedRef = useRef(playbackSpeed);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const importFromJsonStringRef = useRef<((content: string) => Promise<void>) | null>(null);
 
   const getStateNodes = (list: Node[]) =>
     list.filter((n) => (n.type || "stateNode") === "stateNode");
@@ -1794,6 +1800,12 @@ function AutomataEditor() {
   // ─── Restore & persist draft ───
   useLayoutEffect(() => {
     try {
+      const pendingSharedImport = localStorage.getItem(VISUALIZER_SHARED_IMPORT_KEY);
+      if (pendingSharedImport) {
+        setIsDraftReady(true);
+        return;
+      }
+
       const raw = localStorage.getItem(VISUALIZER_DRAFT_KEY);
       if (!raw) {
         setIsDraftReady(true);
@@ -1957,6 +1969,16 @@ function AutomataEditor() {
 
   useEffect(() => {
     if (!isDraftReady) return;
+
+    const sharedImport = localStorage.getItem(VISUALIZER_SHARED_IMPORT_KEY);
+    if (!sharedImport) return;
+
+    localStorage.removeItem(VISUALIZER_SHARED_IMPORT_KEY);
+    void importFromJsonStringRef.current?.(sharedImport);
+  }, [isDraftReady]);
+
+  useEffect(() => {
+    if (!isDraftReady) return;
     try {
       localStorage.setItem(VISUALIZER_DRAFT_KEY, JSON.stringify(buildDraftPayload()));
     } catch (err) {
@@ -1967,12 +1989,13 @@ function AutomataEditor() {
   // ─── Import / Export ───
   // NOTE: Converter-compatible fields stay unchanged. PDA/TM setup is stored as optional metadata.
 
-  const exportConfig = async () => {
+  const buildExportData = React.useCallback(() => {
     const stateNodes = getStateNodes(nodes);
     const annotationNodes = nodes.filter(
       (n) => n.type === "textNoteNode" || n.type === "frameBoxNode"
     );
-    const exportData = {
+
+    return {
       metadata: {
         name: `My_${mode}`,
         type: mode,
@@ -2019,6 +2042,7 @@ function AutomataEditor() {
             layer: Number(data.layer || 0),
           };
         }
+
         const data = n.data as FrameBoxNodeData;
         return {
           id: n.id,
@@ -2035,6 +2059,10 @@ function AutomataEditor() {
         };
       }),
     };
+  }, [edges, isPdaMode, isTmMode, mode, nodes, pdaAcceptMode, pdaSettings, tmAcceptMode, tmSettings]);
+
+  const exportConfig = async () => {
+    const exportData = buildExportData();
 
     const jsonString = JSON.stringify(exportData, null, 2);
     const defaultName = `automata_${mode.toLowerCase()}`;
@@ -2084,6 +2112,51 @@ function AutomataEditor() {
     document.body.appendChild(a);
     a.click();
     a.remove();
+  };
+
+  const copyShareUrl = async () => {
+    try {
+      const shareUrl = buildAutomataShareUrl(
+        buildExportData(),
+        window.location.origin
+      );
+      const sizeWarning =
+        shareUrl.length > 6000
+          ? "This link is long. Some chat apps may truncate it, so use JSON export if sending fails."
+          : "Open this link on SKOVisual to import the automaton immediately.";
+
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(shareUrl);
+          await uiSwal.fire("Share URL copied", sizeWarning, "success");
+          return;
+        } catch (err) {
+          console.warn("Copy share URL failed", err);
+        }
+      }
+
+      await uiSwal.fire({
+        icon: "info",
+        title: "Copy this share URL",
+        text: sizeWarning,
+        input: "textarea",
+        inputValue: shareUrl,
+        inputAttributes: {
+          "aria-label": "Share URL",
+          readonly: "readonly",
+          spellcheck: "false",
+        },
+        width: 720,
+        confirmButtonText: "Close",
+      });
+    } catch (err) {
+      console.error("Failed to build share URL", err);
+      await uiSwal.fire(
+        "Error",
+        "Unable to create a share URL for this automaton.",
+        "error"
+      );
+    }
   };
 
   const importFromJsonString = async (content: string) => {
@@ -2335,6 +2408,8 @@ function AutomataEditor() {
         console.error(err);
       }
   };
+
+  importFromJsonStringRef.current = importFromJsonString;
 
   const importConfig = (event: React.ChangeEvent<HTMLInputElement>) => {
     const fileReader = new FileReader();
@@ -4141,6 +4216,7 @@ function AutomataEditor() {
             <button onClick={showAbout} title="About automata visualizer" style={{ cursor: "pointer", background: "#0f172a", border: "1px solid #475569", padding: "5px 10px", borderRadius: 4, color: "#e2e8f0", fontSize: 12 }}>ℹ About</button>
             <Link href={HELP_GUIDE_PATH} target="_blank" rel="noopener noreferrer" onClick={() => persistDraftNow()} title="Open detailed Help guide (Ctrl+/ or F1)" style={{ display: "inline-flex", alignItems: "center", cursor: "pointer", background: "#0f172a", border: "1px solid #475569", padding: "5px 10px", borderRadius: 4, color: "#e2e8f0", fontSize: 12, textDecoration: "none" }}>❔ Help</Link>
             <button onClick={exportConfig} style={{ cursor: "pointer", background: "#8b5cf6", border: "none", padding: "5px 10px", borderRadius: 4, color: "white", fontSize: 12 }}>💾 Export</button>
+            <button onClick={() => { void copyShareUrl(); }} style={{ cursor: "pointer", background: "#0f766e", border: "none", padding: "5px 10px", borderRadius: 4, color: "white", fontSize: 12 }}>🔗 Share URL</button>
             <button disabled={isRunning} onClick={() => setImportModalOpen(true)} style={{ cursor: isRunning ? "default" : "pointer", background: isRunning ? "#1e293b" : "#6366f1", border: "none", padding: "5px 10px", borderRadius: 4, color: isRunning ? "#64748b" : "white", fontSize: 12 }}>📂 Import</button>
           </div>
         )}
