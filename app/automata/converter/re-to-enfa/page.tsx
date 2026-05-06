@@ -104,6 +104,7 @@ const FrameBoxNode: React.FC<{ data: FrameBoxNodeData }> = ({ data }) => {
         padding: '8px 10px',
         display: 'flex',
         alignItems: 'flex-start',
+        fontFamily: 'var(--font-anuphan)',
       }}
     >
       <div style={{
@@ -113,6 +114,7 @@ const FrameBoxNode: React.FC<{ data: FrameBoxNodeData }> = ({ data }) => {
         border: `1px solid ${data.borderColor || '#f59e0b'}`,
         borderRadius: 6,
         padding: '2px 8px',
+        fontFamily: 'var(--font-anuphan)',
       }}>
         {data.title || 'Thompson Rule'}
       </div>

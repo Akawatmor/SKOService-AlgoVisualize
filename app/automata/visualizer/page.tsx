@@ -1,7 +1,8 @@
 "use client";
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import Link from "next/link";
 import Swal from "sweetalert2";
+import packageJson from "../../../package.json";
 import {
   ReactFlow,
   useNodesState,
@@ -24,7 +25,9 @@ import "@xyflow/react/dist/style.css";
 import type {
   ModeType,
   PdaAcceptMode,
+  PdaSettings,
   TmAcceptMode,
+  TmInputMode,
   TmSettings,
   TextNoteNodeData,
   FrameBoxNodeData,
@@ -32,14 +35,17 @@ import type {
   ImportNode,
   ImportEdge,
   PdaConfig,
+  PdaPathNode,
   TmConfig,
+  TmRule,
+  TmPathNode,
   SimSnapshot,
-  PromptKind,
   PromptState,
 } from "./types";
 
 import {
   PDA_STACK_START,
+  PDA_MAX_EPSILON_EXPANSIONS,
   TM_BLANK,
   TM_MAX_STEPS,
   TM_DEFAULT_TAPE_COUNT,
@@ -58,11 +64,20 @@ import {
   baseHandle,
   normalizeConnector,
   buildDisplaySubHandleMap,
+  buildPdaConfig,
+  formatPdaExtensionSummary,
+  formatPdaStoreContents,
+  getDefaultPdaRuleLabel,
+  getPdaConfigKey,
+  getPdaConfigStores,
+  getPdaRulePromptTitle,
+  getPdaStoreCount,
+  isPdaStoreEmpty,
+  normalizePdaSettings,
   parsePdaRules,
   isValidPdaLabel,
   tryConvertNfaShorthandToPda,
   applyPdaRule,
-  expandPdaEpsilonClosure,
   parseTmRules,
   isValidTmLabel,
   parseMealyRules,
@@ -78,11 +93,290 @@ import {
   getEpsilonClosure,
   getNextStates,
   formatIssuesHtml,
+  isRamJumpMove,
 } from "./utils";
 
 import { PromptModal } from "./PromptModal";
 import { Sidebar } from "./Sidebar";
 import ImportModal from "./ImportModal";
+import PdaSettingsModal from "./PdaSettingsModal";
+import TmSettingsModal from "./TmSettingsModal";
+
+const BASE_PLAYBACK_DELAY_MS = 500;
+const MIN_PLAYBACK_SPEED = 0.1;
+const MAX_PLAYBACK_SPEED = 10;
+const TM_DEFAULT_SHEET_COLUMNS = 8;
+const TM_MIN_SHEET_COLUMNS = 2;
+const TM_MAX_SHEET_COLUMNS = 16;
+const HELP_GUIDE_PATH = "/automata/visualizer/help";
+
+const getPlaybackDelayMs = (speed: number) =>
+  Math.round(BASE_PLAYBACK_DELAY_MS / speed);
+
+const formatPlaybackSpeed = (speed: number) =>
+  `${Number.isInteger(speed) ? speed.toFixed(0) : speed.toFixed(1)}x`;
+
+const buildDefaultHeadToTape = (headCount: number, tapeCount: number) =>
+  Array.from({ length: headCount }, (_, index) =>
+    Math.min(index, Math.max(0, tapeCount - 1))
+  );
+
+const normalizeSheetColumns = (value?: number | null) =>
+  Math.max(
+    TM_MIN_SHEET_COLUMNS,
+    Math.min(TM_MAX_SHEET_COLUMNS, Number(value) || TM_DEFAULT_SHEET_COLUMNS)
+  );
+
+const isSheetMove = (move: string) => move === "U" || move === "D";
+
+const normalizeTrackList = (
+  rawTracks: unknown,
+  tapeCount: number,
+  fallbackTrack: number
+) => {
+  const source = Array.isArray(rawTracks) ? rawTracks : [];
+  const normalized: number[] = [];
+  const seen = new Set<number>();
+
+  source.forEach((entry) => {
+    if (typeof entry !== "number" || Number.isNaN(entry)) return;
+    const track = Math.max(0, Math.min(tapeCount - 1, Math.trunc(entry)));
+    if (seen.has(track)) return;
+    seen.add(track);
+    normalized.push(track);
+  });
+
+  if (normalized.length > 0) return normalized;
+  return [Math.max(0, Math.min(tapeCount - 1, fallbackTrack))];
+};
+
+type LegacyTmSettingsInput = Partial<TmSettings> & { trackMode?: boolean };
+
+const normalizeHeadTrackMap = (
+  settings: LegacyTmSettingsInput | null | undefined,
+  headCount: number,
+  tapeCount: number,
+  fallbackHeadToTape: number[]
+) => {
+  const rawHeadTrackMap = Array.isArray(settings?.headTrackMap) ? settings.headTrackMap : [];
+  const legacySharedTrackPreset = settings?.trackMode === true && headCount === 1;
+
+  return Array.from({ length: headCount }, (_, headIndex) => {
+    const fallbackTrack = fallbackHeadToTape[headIndex] ?? 0;
+    if (legacySharedTrackPreset && headIndex === 0 && rawHeadTrackMap.length === 0) {
+      return Array.from({ length: tapeCount }, (_, tapeIndex) => tapeIndex);
+    }
+    return normalizeTrackList(rawHeadTrackMap[headIndex], tapeCount, fallbackTrack);
+  });
+};
+
+const hasAnyMultiTrackHead = (settings: TmSettings) =>
+  settings.headTrackMap.some((tracks) => tracks.length > 1);
+
+const getTmRuleSlots = (settings: TmSettings) =>
+  settings.headTrackMap.flatMap((tracks, headIndex) =>
+    tracks.map((tapeIndex, trackIndex) => ({ headIndex, tapeIndex, trackIndex }))
+  );
+
+const getTmHeadTrackGroups = (settings: TmSettings) => {
+  let startIndex = 0;
+  return settings.headTrackMap.map((tracks, headIndex) => {
+    const group = {
+      headIndex,
+      tracks,
+      startIndex,
+      length: tracks.length,
+      slotIndexes: Array.from({ length: tracks.length }, (_, offset) => startIndex + offset),
+    };
+    startIndex += tracks.length;
+    return group;
+  });
+};
+
+const getTmHeadGroup = (settings: TmSettings, headIndex: number) =>
+  getTmHeadTrackGroups(settings)[headIndex];
+
+const getTmHeadMove = (rule: TmRule, settings: TmSettings, headIndex: number) => {
+  const group = getTmHeadGroup(settings, headIndex);
+  if (!group) return "S";
+  return rule.moves[group.startIndex] ?? "S";
+};
+
+const getTmRuleArity = (settings: TmSettings) =>
+  getTmRuleSlots(settings).length;
+
+const isTmMoveEnabled = (move: string, settings: TmSettings) => {
+  if (isSheetMove(move)) return settings.sheetMode === "sheet-2d";
+  if (isRamJumpMove(move)) return settings.ramEnabled;
+  return true;
+};
+
+const isTmRuleEnabled = (rule: TmRule, settings: TmSettings) =>
+  rule.moves.every((move) => isTmMoveEnabled(move, settings));
+
+const getHeadMoveMismatchHeads = (rule: TmRule, settings: TmSettings) =>
+  getTmHeadTrackGroups(settings)
+    .filter((group) => {
+      if (group.length <= 1) return false;
+      const moves = group.slotIndexes.map((slotIndex) => rule.moves[slotIndex]);
+      return new Set(moves).size > 1;
+    })
+    .map((group) => group.headIndex);
+
+const hasTrackMoveMismatch = (rule: TmRule, settings: TmSettings) =>
+  getHeadMoveMismatchHeads(rule, settings).length > 0;
+
+const extractStateStorage = (label?: string | null) => {
+  const trimmed = (label || "").trim();
+  const match = trimmed.match(/(?:\{([^{}]+)\}|\[([^\[\]]+)\])\s*$/);
+  return (match?.[1] ?? match?.[2] ?? "").trim() || null;
+};
+
+const getStateStorageLabel = (stateId: string, stateNodes: Node[]) => {
+  const node = stateNodes.find((entry) => entry.id === stateId);
+  const rawLabel = typeof node?.data?.label === "string" ? node.data.label : stateId;
+  return extractStateStorage(rawLabel);
+};
+
+const formatTmCursorPosition = (position: number, settings: TmSettings) => {
+  if (settings.sheetMode !== "sheet-2d") return `@${position}`;
+  const columns = normalizeSheetColumns(settings.sheetColumns);
+  const row = Math.floor(position / columns);
+  const column = position % columns;
+  return `@r${row}c${column}`;
+};
+
+const formatTmExtensionSummary = (settings: TmSettings) => {
+  const parts: string[] = [];
+  if (settings.sheetMode === "sheet-2d") {
+    parts.push(`2D ${normalizeSheetColumns(settings.sheetColumns)} cols`);
+  }
+  if (settings.ramEnabled) parts.push("RAM jump");
+  if (settings.stateStorageEnabled) parts.push("State storage");
+  return parts.length > 0 ? parts.join(" · ") : "Classic tape";
+};
+
+const getTmUnsupportedMoves = (label: string, settings: TmSettings) => {
+  const rules = parseTmRules(label, getTmRuleArity(settings));
+  const unsupported = new Set<string>();
+  rules.forEach((rule) => {
+    rule.moves.forEach((move) => {
+      if (!isTmMoveEnabled(move, settings)) unsupported.add(move);
+    });
+  });
+  return Array.from(unsupported.values());
+};
+
+const getTmTrackRuleIssues = (label: string, settings: TmSettings) => {
+  if (!hasAnyMultiTrackHead(settings)) return [] as string[];
+  const rules = parseTmRules(label, getTmRuleArity(settings));
+  return rules
+    .flatMap((rule, ruleIndex) =>
+      getHeadMoveMismatchHeads(rule, settings).map(
+        (headIndex) =>
+          `Rule ${ruleIndex + 1} uses different moves inside head ${headIndex + 1}. A single head must move all of its assigned tracks together.`
+      )
+    );
+};
+
+const ensureTapeIndex = (tape: string[], targetIndex: number) => {
+  while (tape.length <= targetIndex) tape.push(TM_BLANK);
+};
+
+const normalizeTmSettings = (settings?: LegacyTmSettingsInput | null): TmSettings => {
+  const legacySharedTrackPreset = settings?.trackMode === true;
+  const tapeCount = Math.max(
+    1,
+    Math.min(TM_MAX_TAPES, Number(settings?.tapeCount) || TM_DEFAULT_TAPE_COUNT)
+  );
+  const headCount = Math.max(
+    1,
+    Math.min(
+      TM_MAX_HEADS,
+      legacySharedTrackPreset ? 1 : Number(settings?.headCount) || TM_DEFAULT_HEAD_COUNT
+    )
+  );
+  const fallbackHeadToTape = buildDefaultHeadToTape(headCount, tapeCount);
+  const rawHeadToTape = Array.isArray(settings?.headToTape) ? settings.headToTape : [];
+  const headToTape = Array.from({ length: headCount }, (_, index) => {
+    const raw = rawHeadToTape[index];
+    if (typeof raw !== "number" || Number.isNaN(raw)) return fallbackHeadToTape[index];
+    return Math.max(0, Math.min(tapeCount - 1, Math.trunc(raw)));
+  });
+  const headTrackMap = normalizeHeadTrackMap(settings, headCount, tapeCount, headToTape);
+
+  return {
+    tapeCount,
+    headCount,
+    headToTape: headTrackMap.map((tracks) => tracks[0] ?? 0),
+    headTrackMap,
+    inputMode: settings?.inputMode === "textbook" ? "textbook" : "machine",
+    sheetMode: settings?.sheetMode === "sheet-2d" ? "sheet-2d" : "linear",
+    sheetColumns: normalizeSheetColumns(settings?.sheetColumns),
+    ramEnabled: settings?.ramEnabled === true,
+    stateStorageEnabled: settings?.stateStorageEnabled === true,
+  };
+};
+
+const seedTmTapesFromInput = (
+  inputString: string,
+  tapeCount: number,
+  inputMode: TmInputMode
+) => {
+  const seededInput = inputString.length > 0 ? inputString.split("") : [TM_BLANK];
+  return Array.from({ length: tapeCount }, (_, tapeIndex) => {
+    if (inputMode === "textbook") return [...seededInput];
+    return tapeIndex === 0 ? [...seededInput] : [TM_BLANK];
+  });
+};
+
+const getTmReadSymbols = (cfg: TmConfig, settings: TmSettings) =>
+  getTmRuleSlots(settings).map(({ headIndex, tapeIndex }) => {
+    const headPos = cfg.heads[headIndex] ?? 0;
+    const tape = cfg.tapes[tapeIndex] ?? [TM_BLANK];
+    return tape[headPos] ?? TM_BLANK;
+  });
+
+const formatTmInputModeLabel = (inputMode: TmInputMode) =>
+  inputMode === "textbook" ? "Textbook" : "Machine";
+
+const formatTmHeadMapping = (settings: TmSettings) =>
+  settings.headTrackMap
+        .map((tracks, headIndex) => `H${headIndex + 1}->${tracks.map((tapeIndex) => `T${tapeIndex + 1}`).join("+")}`)
+        .join(", ");
+
+const getDefaultTmRuleLabel = (settings: TmSettings) => {
+  const moveToken = settings.ramEnabled ? "@4" : settings.sheetMode === "sheet-2d" ? "D" : "R";
+  const arity = getTmRuleArity(settings);
+  if (arity <= 1) return `0->1,${moveToken}`;
+
+  const reads = Array.from({ length: arity }, () => "0").join(",");
+  const writes = Array.from({ length: arity }, () => "1").join(",");
+  const moves = Array.from({ length: arity }, () => moveToken).join(",");
+  return `(${reads})->(${writes}),(${moves})`;
+};
+
+const getTmRulePromptTitle = (action: "Input" | "Edit", settings: TmSettings) => {
+  const extensionNotes = [
+    hasAnyMultiTrackHead(settings)
+      ? "multi-track heads: slot order is grouped by head, and each head uses one shared move across its tracks"
+      : null,
+    settings.sheetMode === "sheet-2d" ? "U/D for matrix moves" : null,
+    settings.ramEnabled ? "@12 for RAM jump" : null,
+    settings.stateStorageEnabled ? "state labels may end with {payload}" : null,
+  ]
+    .filter(Boolean)
+    .join("; ");
+
+  if (getTmRuleArity(settings) <= 1) {
+    return `${action} TM rule(s) (e.g. "0->1,R; B->B,L" or "0/1,R" — B = blank${
+      extensionNotes ? `; ${extensionNotes}` : ""
+    })`;
+  }
+  return `${action} TM rule(s) (one slot per head-track lane, e.g. "${getDefaultTmRuleLabel(
+    settings
+  )}"${extensionNotes ? `; ${extensionNotes}` : ""})`;
+};
 
 // ─────────────────────────────────────────────────────────
 // Main Editor Component
@@ -111,29 +405,21 @@ function AutomataEditor() {
   // ─── Acceptance mode state ───
   const [pdaAcceptMode, setPdaAcceptMode] = useState<PdaAcceptMode>("final-state");
   const [tmAcceptMode, setTmAcceptMode] = useState<TmAcceptMode>("final-state");
+  const [pdaSettings, setPdaSettings] = useState<PdaSettings>(() =>
+    normalizePdaSettings()
+  );
 
   // ─── TM Multi-tape/Multi-head settings ───
-  const [tmSettings, setTmSettings] = useState<TmSettings>({
-    tapeCount: TM_DEFAULT_TAPE_COUNT,
-    headCount: TM_DEFAULT_HEAD_COUNT,
-    headToTape: [0], // Default: head 0 → tape 0
-  });
+  const [tmSettings, setTmSettings] = useState<TmSettings>(() =>
+    normalizeTmSettings()
+  );
 
-  // Helper to update headToTape when tape/head count changes
+  const updatePdaSettings = (updates: Partial<PdaSettings>) => {
+    setPdaSettings((prev) => normalizePdaSettings({ ...prev, ...updates }));
+  };
+
   const updateTmSettings = (updates: Partial<TmSettings>) => {
-    setTmSettings(prev => {
-      const newSettings = { ...prev, ...updates };
-      // Rebuild headToTape array if counts changed
-      if (updates.headCount !== undefined || updates.tapeCount !== undefined) {
-        const headCount = updates.headCount ?? prev.headCount;
-        const tapeCount = updates.tapeCount ?? prev.tapeCount;
-        // Default mapping: head i → tape min(i, tapeCount-1)
-        newSettings.headToTape = Array.from({ length: headCount }, (_, i) => 
-          Math.min(i, tapeCount - 1)
-        );
-      }
-      return newSettings;
-    });
+    setTmSettings((prev) => normalizeTmSettings({ ...prev, ...updates }));
   };
 
   // ─── Timeline navigation state ───
@@ -144,15 +430,17 @@ function AutomataEditor() {
   const [activeStates, setActiveStates] = useState<Set<string>>(new Set());
   const [stepIndex, setStepIndex] = useState(-1);
   const [isRunning, setIsRunning] = useState(false);
+  const [isAutoRunning, setIsAutoRunning] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [simMessage, setSimMessage] = useState("Ready");
   const [history, setHistory] = useState<string[]>([]);
   const [pdaConfigs, setPdaConfigs] = useState<PdaConfig[]>([]);
   const [tmConfigs, setTmConfigs] = useState<TmConfig[]>([]);
   const [simTimeline, setSimTimeline] = useState<SimSnapshot[]>([]);
   const [outputString, setOutputString] = useState(""); // For Mealy/Moore
+  const [isDraftReady, setIsDraftReady] = useState(false);
 
   // ─── Refs ───
-  const hasHydratedRef = useRef(false);
   const runLoopRef = useRef<number | null>(null);
   const activeStatesRef = useRef(activeStates);
   const stepIndexRef = useRef(stepIndex);
@@ -160,10 +448,224 @@ function AutomataEditor() {
   const nodesRef = useRef<Node[]>(nodes);
   const pdaConfigsRef = useRef(pdaConfigs);
   const tmConfigsRef = useRef(tmConfigs);
+  const pdaPathConfigsRef = useRef<PdaConfig[]>([]);
+  const tmPathConfigsRef = useRef<TmConfig[]>([]);
+  const pdaPathNodesRef = useRef<PdaPathNode[]>([]);
+  const tmPathNodesRef = useRef<TmPathNode[]>([]);
+  const nextPathNodeIdRef = useRef(0);
+  const historyRef = useRef(history);
+  const playbackSpeedRef = useRef(playbackSpeed);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const getStateNodes = (list: Node[]) =>
     list.filter((n) => (n.type || "stateNode") === "stateNode");
+
+  const clonePdaConfigs = React.useCallback((configs: PdaConfig[]) =>
+    configs.map((cfg) => ({
+      state: cfg.state,
+      stack: [...cfg.stack],
+      stacks: Array.isArray(cfg.stacks)
+        ? cfg.stacks.map((store) => [...store])
+        : undefined,
+      storageModel: cfg.storageModel,
+    })), []);
+
+  const cloneTmConfigs = React.useCallback((configs: TmConfig[]) =>
+    configs.map((cfg) => ({
+      state: cfg.state,
+      tapes: cfg.tapes.map((tape) => [...tape]),
+      heads: [...cfg.heads],
+    })), []);
+
+  const clonePdaPathNodes = React.useCallback((nodes: PdaPathNode[]): PdaPathNode[] =>
+    nodes.map((node) => ({
+      id: node.id,
+      parentId: node.parentId,
+      stepIndex: node.stepIndex,
+      state: node.state,
+      stack: [...node.stack],
+      stacks: Array.isArray(node.stacks)
+        ? node.stacks.map((store) => [...store])
+        : undefined,
+      storageModel: node.storageModel,
+      transitionLabel: node.transitionLabel,
+    })), []);
+
+  const cloneTmPathNodes = React.useCallback((nodes: TmPathNode[]): TmPathNode[] =>
+    nodes.map((node) => ({
+      id: node.id,
+      parentId: node.parentId,
+      stepIndex: node.stepIndex,
+      state: node.state,
+      tapes: node.tapes.map((tape) => [...tape]),
+      heads: [...node.heads],
+      transitionLabel: node.transitionLabel,
+    })), []);
+
+  const cloneSimTimeline = React.useCallback((timeline: SimSnapshot[]): SimSnapshot[] =>
+    timeline.map((snap) => ({
+      stepIndex: snap.stepIndex,
+      activeStates: [...snap.activeStates],
+      pdaConfigs: clonePdaConfigs(snap.pdaConfigs),
+      tmConfigs: cloneTmConfigs(snap.tmConfigs),
+      pdaPathConfigs: snap.pdaPathConfigs ? clonePdaConfigs(snap.pdaPathConfigs) : undefined,
+      tmPathConfigs: snap.tmPathConfigs ? cloneTmConfigs(snap.tmPathConfigs) : undefined,
+      pdaPathNodes: snap.pdaPathNodes ? clonePdaPathNodes(snap.pdaPathNodes) : undefined,
+      tmPathNodes: snap.tmPathNodes ? cloneTmPathNodes(snap.tmPathNodes) : undefined,
+      simMessage: snap.simMessage,
+      history: [...snap.history],
+    })), [clonePdaConfigs, cloneTmConfigs, clonePdaPathNodes, cloneTmPathNodes]);
+
+  const createPathNodeId = (prefix: "pda" | "tm") =>
+    `${prefix}-${nextPathNodeIdRef.current++}`;
+
+  const pdaConfigFromPathNode = (node: PdaPathNode): PdaConfig =>
+    buildPdaConfig(
+      node.state,
+      Array.isArray(node.stacks) && node.stacks.length > 0
+        ? node.stacks
+        : [node.stack],
+      pdaSettings
+    );
+
+  const tmConfigFromPathNode = (node: TmPathNode): TmConfig => ({
+    state: node.state,
+    tapes: node.tapes.map((tape) => [...tape]),
+    heads: [...node.heads],
+  });
+
+  const buildFallbackPdaPathNodes = (configs: PdaConfig[], snapshotStep: number) =>
+    configs.map((cfg, index) => ({
+      id: `legacy-pda-${snapshotStep}-${index}`,
+      parentId: null,
+      stepIndex: snapshotStep,
+      state: cfg.state,
+      stack: [...cfg.stack],
+      stacks: getPdaConfigStores(cfg, pdaSettings).map((store) => [...store]),
+      storageModel: pdaSettings.storageModel,
+      transitionLabel: snapshotStep === 0 ? "Start" : `Step ${snapshotStep}`,
+    }));
+
+  const buildFallbackTmPathNodes = (configs: TmConfig[], snapshotStep: number) =>
+    configs.map((cfg, index) => ({
+      id: `legacy-tm-${snapshotStep}-${index}`,
+      parentId: null,
+      stepIndex: snapshotStep,
+      state: cfg.state,
+      tapes: cfg.tapes.map((tape) => [...tape]),
+      heads: [...cfg.heads],
+      transitionLabel: snapshotStep === 0 ? "Start" : `Step ${snapshotStep}`,
+    }));
+
+  const expandPdaPathNodes = (nodes: PdaPathNode[], currentEdges: Edge[]) => {
+    const keyOf = (node: PdaPathNode) => getPdaConfigKey(pdaConfigFromPathNode(node), pdaSettings);
+    const queue: Array<{ node: PdaPathNode; seen: Set<string> }> = nodes.map((node) => ({
+      node: {
+        ...node,
+        stack: [...node.stack],
+        stacks: Array.isArray(node.stacks)
+          ? node.stacks.map((store) => [...store])
+          : undefined,
+      },
+      seen: new Set<string>([keyOf(node)]),
+    }));
+    const out = clonePdaPathNodes(nodes);
+
+    let expansions = 0;
+    while (queue.length > 0 && expansions < PDA_MAX_EPSILON_EXPANSIONS) {
+      const current = queue.shift();
+      if (!current) break;
+
+      const outgoing = currentEdges.filter((edge) => edge.source === current.node.state);
+      outgoing.forEach((edge) => {
+        const rules = parsePdaRules(edge.label as string, pdaSettings).filter(
+          (rule) => normalizeEpsilonSymbol(rule.input) === "ε"
+        );
+
+        rules.forEach((rule) => {
+          const next = applyPdaRule(
+            pdaConfigFromPathNode(current.node),
+            edge.target,
+            rule,
+            pdaSettings
+          );
+          if (!next) return;
+
+          const nextKey = getPdaConfigKey(next, pdaSettings);
+          if (current.seen.has(nextKey)) return;
+
+          const nextNode: PdaPathNode = {
+            id: createPathNodeId("pda"),
+            parentId: current.node.id,
+            stepIndex: current.node.stepIndex,
+            state: next.state,
+            stack: [...next.stack],
+            stacks: getPdaConfigStores(next, pdaSettings).map((store) => [...store]),
+            storageModel: pdaSettings.storageModel,
+            transitionLabel: "ε-move",
+          };
+
+          out.push(nextNode);
+          const nextSeen = new Set(current.seen);
+          nextSeen.add(nextKey);
+          queue.push({ node: nextNode, seen: nextSeen });
+        });
+      });
+
+      expansions += 1;
+    }
+
+    return out;
+  };
+
+  const dedupePdaConfigs = (configs: PdaConfig[]) => {
+    const unique = new Map<string, PdaConfig>();
+    configs.forEach((cfg) => {
+      const key = getPdaConfigKey(cfg, pdaSettings);
+      if (!unique.has(key)) {
+        unique.set(
+          key,
+          buildPdaConfig(cfg.state, getPdaConfigStores(cfg, pdaSettings), pdaSettings)
+        );
+      }
+    });
+    return Array.from(unique.values());
+  };
+
+  const formatPdaConfigSummary = React.useCallback(
+    (cfg: PdaConfig) => {
+      const stores = getPdaConfigStores(cfg, pdaSettings);
+      if (stores.length === 1 && pdaSettings.storageModel === "stack") {
+        return `${cfg.state}:[${formatPdaStoreContents(stores[0], pdaSettings)}]`;
+      }
+      if (pdaSettings.storageModel === "queue") {
+        return `${cfg.state} Q:[${formatPdaStoreContents(stores[0], pdaSettings)}]`;
+      }
+      return `${cfg.state} ${stores
+        .map(
+          (store, index) =>
+            `S${index + 1}:[${formatPdaStoreContents(store, pdaSettings)}]`
+        )
+        .join(" ")}`;
+    },
+    [pdaSettings]
+  );
+
+  const dedupeTmConfigs = (configs: TmConfig[]) => {
+    const unique = new Map<string, TmConfig>();
+    configs.forEach((cfg) => {
+      const tapesStr = cfg.tapes.map((tape) => tape.join("")).join("|");
+      const key = `${cfg.state}|${cfg.heads.join(",")}|${tapesStr}`;
+      if (!unique.has(key)) {
+        unique.set(key, {
+          state: cfg.state,
+          tapes: cfg.tapes.map((tape) => [...tape]),
+          heads: [...cfg.heads],
+        });
+      }
+    });
+    return Array.from(unique.values());
+  };
 
   // Keep refs in sync
   useEffect(() => { activeStatesRef.current = activeStates; }, [activeStates]);
@@ -172,6 +674,16 @@ function AutomataEditor() {
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { pdaConfigsRef.current = pdaConfigs; }, [pdaConfigs]);
   useEffect(() => { tmConfigsRef.current = tmConfigs; }, [tmConfigs]);
+  useEffect(() => { historyRef.current = history; }, [history]);
+  useEffect(() => { playbackSpeedRef.current = playbackSpeed; }, [playbackSpeed]);
+
+  const clearRunLoop = () => {
+    if (runLoopRef.current !== null) {
+      window.clearTimeout(runLoopRef.current);
+      runLoopRef.current = null;
+    }
+    setIsAutoRunning(false);
+  };
 
   // ─── Simulation helpers ───
   const pushSimSnapshot = (next: {
@@ -179,6 +691,10 @@ function AutomataEditor() {
     activeStates: Set<string>;
     pdaConfigs: PdaConfig[];
     tmConfigs: TmConfig[];
+    pdaPathConfigs?: PdaConfig[];
+    tmPathConfigs?: TmConfig[];
+    pdaPathNodes?: PdaPathNode[];
+    tmPathNodes?: TmPathNode[];
     simMessage: string;
     history: string[];
   }) => {
@@ -187,15 +703,12 @@ function AutomataEditor() {
       {
         stepIndex: next.stepIndex,
         activeStates: Array.from(next.activeStates),
-        pdaConfigs: next.pdaConfigs.map((cfg) => ({
-          state: cfg.state,
-          stack: [...cfg.stack],
-        })),
-        tmConfigs: next.tmConfigs.map((cfg) => ({
-          state: cfg.state,
-          tapes: cfg.tapes.map(t => [...t]),
-          heads: [...cfg.heads],
-        })),
+        pdaConfigs: clonePdaConfigs(next.pdaConfigs),
+        tmConfigs: cloneTmConfigs(next.tmConfigs),
+        pdaPathConfigs: clonePdaConfigs(next.pdaPathConfigs ?? next.pdaConfigs),
+        tmPathConfigs: cloneTmConfigs(next.tmPathConfigs ?? next.tmConfigs),
+        pdaPathNodes: clonePdaPathNodes(next.pdaPathNodes ?? []),
+        tmPathNodes: cloneTmPathNodes(next.tmPathNodes ?? []),
         simMessage: next.simMessage,
         history: [...next.history],
       },
@@ -279,11 +792,32 @@ function AutomataEditor() {
 
     // TM
     if (isTmMode) {
+      const extensionIssues: string[] = [];
+      edges.forEach((edge) => {
+        const unsupportedMoves = getTmUnsupportedMoves((edge.label as string) || "", tmSettings);
+        const trackRuleIssues = getTmTrackRuleIssues((edge.label as string) || "", tmSettings);
+        if (unsupportedMoves.length > 0) {
+          extensionIssues.push(
+            `Transition ${edge.source} -> ${edge.target} uses move(s) ${unsupportedMoves.join(", ")} without enabling the matching TM extension.`
+          );
+        }
+        extensionIssues.push(...trackRuleIssues.map((issue) => `Transition ${edge.source} -> ${edge.target}: ${issue}`));
+      });
+      if (extensionIssues.length > 0) {
+        uiSwal.fire({
+          icon: "error",
+          title: "TM extension mismatch",
+          html: formatIssuesHtml(extensionIssues),
+        });
+        return false;
+      }
+
       if (mode !== "NTM") {
         const seen = new Set<string>();
         const issues: string[] = [];
+        const ruleArity = getTmRuleArity(tmSettings);
         edges.forEach((edge) => {
-          const rules = parseTmRules(edge.label as string, tmSettings.tapeCount);
+          const rules = parseTmRules(edge.label as string, ruleArity);
           rules.forEach((rule) => {
             // For multi-tape, key includes all read symbols
             const key = `${edge.source}|${rule.reads.join(',')}`;
@@ -304,35 +838,53 @@ function AutomataEditor() {
         }
       }
 
-      // Initialize multiple tapes
-      const { tapeCount, headCount, headToTape } = tmSettings;
-      const initialTapes: string[][] = [];
-      for (let t = 0; t < tapeCount; t++) {
-        // First tape gets the input, others start with blank
-        if (t === 0) {
-          initialTapes.push(inputString.length > 0 ? inputString.split("") : [TM_BLANK]);
-        } else {
-          initialTapes.push([TM_BLANK]);
-        }
-      }
+      nextPathNodeIdRef.current = 0;
+
+      const { tapeCount, headCount } = tmSettings;
+      const initialTapes = seedTmTapesFromInput(
+        inputString,
+        tapeCount,
+        tmSettings.inputMode
+      );
       
-      // Initialize head positions (all start at 0)
       const initialHeads = Array.from({ length: headCount }, () => 0);
 
       const initialConfigs: TmConfig[] = [
         { state: startNode.id, tapes: initialTapes, heads: initialHeads },
       ];
+      const initialPathNodes: TmPathNode[] = initialConfigs.map((cfg) => ({
+        id: createPathNodeId("tm"),
+        parentId: null,
+        stepIndex: 0,
+        state: cfg.state,
+        tapes: cfg.tapes.map((tape) => [...tape]),
+        heads: [...cfg.heads],
+        transitionLabel: "Start",
+      }));
       const active = new Set(initialConfigs.map((c) => c.state));
-      const headsInfo = headCount > 1 ? `, heads=[${initialHeads.join(',')}]` : `, head=0`;
+      const headsInfo = headCount > 1
+        ? `, heads=[${initialHeads.map((pos) => formatTmCursorPosition(pos, tmSettings)).join(', ')}]`
+        : `, head=${formatTmCursorPosition(0, tmSettings)}`;
       const tapesInfo = tapeCount > 1 ? ` (${tapeCount} tapes)` : '';
-      const startMsg = `TM start at ${startNode.id}${headsInfo}${tapesInfo}`;
-      const startHistory = [`Start TM at ${startNode.id}${tapesInfo}`];
+      const startMsg = `TM start at ${startNode.id}${headsInfo}${tapesInfo} · ${formatTmInputModeLabel(
+        tmSettings.inputMode
+      )} · ${formatTmExtensionSummary(tmSettings)}`;
+      const startHistory = [
+        `Start TM at ${startNode.id}${tapesInfo} · ${formatTmHeadMapping(tmSettings)} · ${formatTmInputModeLabel(
+          tmSettings.inputMode
+        )} · ${formatTmExtensionSummary(tmSettings)}`,
+      ];
+      tmPathConfigsRef.current = cloneTmConfigs(initialConfigs);
+      tmPathNodesRef.current = cloneTmPathNodes(initialPathNodes);
+      pdaPathConfigsRef.current = [];
+      pdaPathNodesRef.current = [];
 
       setTmConfigs(initialConfigs);
       setPdaConfigs([]);
       setActiveStates(active);
       setStepIndex(0);
       setIsRunning(true);
+      setIsAutoRunning(false);
       setSimMessage(startMsg);
       setHistory(startHistory);
       setSimTimeline([]);
@@ -342,6 +894,8 @@ function AutomataEditor() {
         activeStates: active,
         pdaConfigs: [],
         tmConfigs: initialConfigs,
+        tmPathConfigs: initialConfigs,
+        tmPathNodes: initialPathNodes,
         simMessage: startMsg,
         history: startHistory,
       });
@@ -350,18 +904,59 @@ function AutomataEditor() {
 
     // PDA
     if (isPdaMode) {
-      const initialConfigs = expandPdaEpsilonClosure(
-        [{ state: startNode.id, stack: [PDA_STACK_START] }],
-        edges
+      const invalidPdaEdges = edges.filter((edge) => {
+        const label = ((edge.label as string) || "").trim();
+        return label !== "" && parsePdaRules(label, pdaSettings).length === 0;
+      });
+      if (invalidPdaEdges.length > 0) {
+        uiSwal.fire({
+          icon: "error",
+          title: "PDA setup mismatch",
+          html: formatIssuesHtml(
+            invalidPdaEdges.map(
+              (edge) =>
+                `Transition ${edge.source} -> ${edge.target} does not match ${formatPdaExtensionSummary(
+                  pdaSettings
+                )}. Update the PDA setup or rewrite that label.`
+            )
+          ),
+        });
+        return false;
+      }
+
+      nextPathNodeIdRef.current = 0;
+      const initialStores = Array.from(
+        { length: getPdaStoreCount(pdaSettings) },
+        () => [PDA_STACK_START]
       );
+      const initialConfig = buildPdaConfig(startNode.id, initialStores, pdaSettings);
+      const initialPathNodes = expandPdaPathNodes([
+        {
+          id: createPathNodeId("pda"),
+          parentId: null,
+          stepIndex: 0,
+          state: initialConfig.state,
+          stack: [...initialConfig.stack],
+          stacks: getPdaConfigStores(initialConfig, pdaSettings).map((store) => [...store]),
+          storageModel: pdaSettings.storageModel,
+          transitionLabel: "Start",
+        },
+      ], edges);
+      const initialPathConfigs = initialPathNodes.map((node) => pdaConfigFromPathNode(node));
+      const initialConfigs = dedupePdaConfigs(initialPathConfigs);
+      pdaPathConfigsRef.current = clonePdaConfigs(initialPathConfigs);
+      pdaPathNodesRef.current = clonePdaPathNodes(initialPathNodes);
+      tmPathConfigsRef.current = [];
+      tmPathNodesRef.current = [];
       const active = new Set(initialConfigs.map((c) => c.state));
       setPdaConfigs(initialConfigs);
       setActiveStates(active);
       setStepIndex(0);
       setIsRunning(true);
+      setIsAutoRunning(false);
       const sample = initialConfigs
         .slice(0, 3)
-        .map((c) => `${c.state}:[${c.stack.join("") || "\u03b5"}]`)
+        .map((c) => formatPdaConfigSummary(c))
         .join(" | ");
       const startMsg = `PDA start (${initialConfigs.length} cfg): ${sample}${
         initialConfigs.length > 3 ? " ..." : ""
@@ -372,11 +967,14 @@ function AutomataEditor() {
       setSimMessage(startMsg);
       setHistory(startHistory);
       setSimTimeline([]);
+      setTimelineIndex(-1);
       pushSimSnapshot({
         stepIndex: 0,
         activeStates: active,
         pdaConfigs: initialConfigs,
         tmConfigs: [],
+        pdaPathConfigs: initialPathConfigs,
+        pdaPathNodes: initialPathNodes,
         simMessage: startMsg,
         history: startHistory,
       });
@@ -388,6 +986,11 @@ function AutomataEditor() {
     setActiveStates(initialSet);
     setPdaConfigs([]);
     setTmConfigs([]);
+    pdaPathConfigsRef.current = [];
+    tmPathConfigsRef.current = [];
+    pdaPathNodesRef.current = [];
+    tmPathNodesRef.current = [];
+    nextPathNodeIdRef.current = 0;
     setOutputString(""); // Reset output for transducers
     
     // For Moore machine, initial output is from start state
@@ -398,12 +1001,14 @@ function AutomataEditor() {
     
     setStepIndex(0);
     setIsRunning(true);
+    setIsAutoRunning(false);
     const modeLabel = isMealyMoore ? `${mode} transducer` : (isBuchi ? "Büchi" : (isTimed ? "Timed" : "FA"));
     const startMsg = `Start ${modeLabel} at: {${Array.from(initialSet).join(", ")}}`;
     const startHistory = [`Start: {${Array.from(initialSet).join(", ")}}`];
     setSimMessage(startMsg);
     setHistory(startHistory);
     setSimTimeline([]);
+    setTimelineIndex(-1);
     pushSimSnapshot({
       stepIndex: 0,
       activeStates: initialSet,
@@ -422,30 +1027,30 @@ function AutomataEditor() {
 
     // ── TM step (multi-tape support) ──
     if (isTmMode) {
-      const currentConfigs = tmConfigsRef.current;
-      if (currentConfigs.length === 0) {
+      const nextStepIndex = idx + 1;
+      const currentPathNodes = tmPathNodesRef.current.length > 0
+        ? tmPathNodesRef.current
+        : buildFallbackTmPathNodes(tmConfigsRef.current, idx);
+      if (currentPathNodes.length === 0) {
         setIsRunning(false);
         return false;
       }
 
-      const { tapeCount, headCount, headToTape } = tmSettings;
+        const { headCount, headTrackMap } = tmSettings;
+        const ruleArity = getTmRuleArity(tmSettings);
+      const currentStateNodes = getStateNodes(nodesRef.current);
       const usedEdgeIds = new Set<string>();
-      const moved: TmConfig[] = [];
+      const movedNodes: TmPathNode[] = [];
 
-      currentConfigs.forEach((cfg) => {
+      currentPathNodes.forEach((pathNode) => {
+        const cfg = tmConfigFromPathNode(pathNode);
         const outgoing = currentEdges.filter((e) => e.source === cfg.state);
-        
-        // Read symbols from all heads (each head reads from its assigned tape)
-        const currentSyms: string[] = [];
-        for (let h = 0; h < headCount; h++) {
-          const tapeIdx = headToTape[h];
-          const tape = cfg.tapes[tapeIdx] || [TM_BLANK];
-          const headPos = cfg.heads[h];
-          currentSyms.push(tape[headPos] ?? TM_BLANK);
-        }
+        const currentSyms = getTmReadSymbols(cfg, tmSettings);
 
         outgoing.forEach((edge) => {
-          const rules = parseTmRules(edge.label as string, tapeCount).filter((r) => {
+          const rules = parseTmRules(edge.label as string, ruleArity).filter((r) => {
+            if (!isTmRuleEnabled(r, tmSettings)) return false;
+            if (hasTrackMoveMismatch(r, tmSettings)) return false;
             // Match rule if all read symbols match
             if (r.reads.length !== currentSyms.length) return false;
             return r.reads.every((read, i) => read === currentSyms[i]);
@@ -455,50 +1060,126 @@ function AutomataEditor() {
             // Clone tapes
             const nextTapes = cfg.tapes.map(tape => [...tape]);
             const nextHeads = [...cfg.heads];
+            let blocked = false;
 
-            // Apply writes and moves for each head
             for (let h = 0; h < headCount; h++) {
-              const tapeIdx = headToTape[h];
-              const tape = nextTapes[tapeIdx];
-              const headPos = nextHeads[h];
+              const tracks = headTrackMap[h] ?? [];
+              if (tracks.length === 0) continue;
 
-              // Write symbol
-              tape[headPos] = rule.writes[h];
+              const group = getTmHeadGroup(tmSettings, h);
+              if (!group) continue;
 
-              // Move head
-              const moveDir = rule.moves[h];
+              const headPos = nextHeads[h] ?? 0;
+              group.slotIndexes.forEach((slotIndex, trackOffset) => {
+                const tapeIdx = tracks[trackOffset];
+                const tape = nextTapes[tapeIdx];
+                if (!tape) return;
+                tape[headPos] = rule.writes[slotIndex] ?? TM_BLANK;
+              });
+
+              const moveDir = getTmHeadMove(rule, tmSettings, h);
+              const affectedTracks = new Set(tracks);
+              const shiftOtherHeads = (delta: number) => {
+                for (let hh = 0; hh < headCount; hh++) {
+                  if (hh === h) continue;
+                  const sharedTrack = (headTrackMap[hh] ?? []).some((track) => affectedTracks.has(track));
+                  if (sharedTrack) nextHeads[hh] += delta;
+                }
+              };
+
+              if (isRamJumpMove(moveDir)) {
+                const targetIndex = Number(moveDir.slice(1));
+                if (mode === "LBA" && tracks.some((track) => targetIndex >= (nextTapes[track]?.length ?? 0))) {
+                  blocked = true;
+                  break;
+                }
+                tracks.forEach((track) => ensureTapeIndex(nextTapes[track], targetIndex));
+                nextHeads[h] = targetIndex;
+                continue;
+              }
+
+              if (moveDir === "U") {
+                const columns = normalizeSheetColumns(tmSettings.sheetColumns);
+                if (mode === "LBA") {
+                  if (headPos < columns) {
+                    blocked = true;
+                    break;
+                  }
+                  nextHeads[h] = headPos - columns;
+                } else if (headPos < columns) {
+                  tracks.forEach((track) => {
+                    const tape = nextTapes[track];
+                    for (let column = 0; column < columns; column++) {
+                      tape.unshift(TM_BLANK);
+                    }
+                  });
+                  shiftOtherHeads(columns);
+                  nextHeads[h] = headPos;
+                } else {
+                  nextHeads[h] = headPos - columns;
+                }
+                continue;
+              }
+
+              if (moveDir === "D") {
+                const columns = normalizeSheetColumns(tmSettings.sheetColumns);
+                const targetIndex = headPos + columns;
+                if (mode === "LBA" && tracks.some((track) => targetIndex >= (nextTapes[track]?.length ?? 0))) {
+                  blocked = true;
+                  break;
+                }
+                tracks.forEach((track) => ensureTapeIndex(nextTapes[track], targetIndex));
+                nextHeads[h] = targetIndex;
+                continue;
+              }
+
               if (moveDir === "L") {
                 if (mode === "LBA") {
-                  if (headPos === 0) return; // LBA can't go left of start
+                  if (headPos === 0) {
+                    blocked = true;
+                    break;
+                  }
                   nextHeads[h] = headPos - 1;
                 } else if (headPos === 0) {
-                  // Extend tape to the left
-                  tape.unshift(TM_BLANK);
-                  // Adjust all heads on this tape
-                  for (let hh = 0; hh < headCount; hh++) {
-                    if (headToTape[hh] === tapeIdx && hh !== h) {
-                      nextHeads[hh] += 1; // Shift other heads on same tape
-                    }
-                  }
+                  tracks.forEach((track) => {
+                    nextTapes[track].unshift(TM_BLANK);
+                  });
+                  shiftOtherHeads(1);
                   nextHeads[h] = 0;
                 } else {
                   nextHeads[h] = headPos - 1;
                 }
               } else if (moveDir === "R") {
                 if (mode === "LBA") {
-                  if (headPos >= tape.length - 1) return; // LBA can't go right of end
+                  if (tracks.some((track) => headPos >= (nextTapes[track]?.length ?? 0) - 1)) {
+                    blocked = true;
+                    break;
+                  }
                   nextHeads[h] = headPos + 1;
                 } else {
-                  nextHeads[h] = headPos + 1;
-                  if (nextHeads[h] >= tape.length) {
-                    tape.push(TM_BLANK);
-                  }
+                  const targetIndex = headPos + 1;
+                  tracks.forEach((track) => ensureTapeIndex(nextTapes[track], targetIndex));
+                  nextHeads[h] = targetIndex;
                 }
               }
               // "S" = Stay, no movement
             }
 
-            moved.push({ state: edge.target, tapes: nextTapes, heads: nextHeads });
+            if (blocked) return;
+
+            const readsStr = rule.reads.length > 1 ? `(${rule.reads.join(",")})` : rule.reads[0];
+            const writesStr = rule.writes.length > 1 ? `(${rule.writes.join(",")})` : rule.writes[0];
+            const movesStr = rule.moves.length > 1 ? `(${rule.moves.join(",")})` : rule.moves[0];
+
+            movedNodes.push({
+              id: createPathNodeId("tm"),
+              parentId: pathNode.id,
+              stepIndex: nextStepIndex,
+              state: edge.target,
+              tapes: nextTapes.map((tape) => [...tape]),
+              heads: [...nextHeads],
+              transitionLabel: `${readsStr} → ${writesStr} • ${movesStr}`,
+            });
             if (edge.id) usedEdgeIds.add(edge.id);
           });
         });
@@ -506,26 +1187,26 @@ function AutomataEditor() {
 
       flashEdges(usedEdgeIds, 300);
 
-      // Deduplicate configurations
-      const unique = new Map<string, TmConfig>();
-      moved.forEach((cfg) => {
-        const tapesStr = cfg.tapes.map(t => t.join("")).join("|");
-        const key = `${cfg.state}|${cfg.heads.join(",")}|${tapesStr}`;
-        if (!unique.has(key)) unique.set(key, cfg);
-      });
-      const nextConfigs = Array.from(unique.values());
+      const moved = movedNodes.map((node) => tmConfigFromPathNode(node));
+      tmPathConfigsRef.current = cloneTmConfigs(moved);
+      tmPathNodesRef.current = cloneTmPathNodes(movedNodes);
+      const nextConfigs = dedupeTmConfigs(moved);
       const active = new Set(nextConfigs.map((c) => c.state));
-      const nextStepIndex = idx + 1;
       
       // Build summary message
       const sample = nextConfigs
         .slice(0, 2)
         .map((c) => {
-          const headsStr = c.heads.length > 1 ? `@[${c.heads.join(',')}]` : `@${c.heads[0]}`;
+          const headsStr = c.heads
+            .map((position, headIndex) => `H${headIndex + 1}${formatTmCursorPosition(position, tmSettings)}`)
+            .join(', ');
           const tapesStr = c.tapes.length > 1 
             ? c.tapes.map((t, i) => `T${i+1}:[${t.join("")}]`).join(' ')
             : `[${c.tapes[0].join("")}]`;
-          return `${c.state}${headsStr} ${tapesStr}`;
+          const stateStorage = tmSettings.stateStorageEnabled
+            ? getStateStorageLabel(c.state, currentStateNodes)
+            : null;
+          return `${c.state}${stateStorage ? `{${stateStorage}}` : ''} ${headsStr} ${tapesStr}`;
         })
         .join(" | ");
       const nextMsg =
@@ -534,7 +1215,7 @@ function AutomataEditor() {
               nextConfigs.length > 2 ? " ..." : ""
             }`
           : "TM halted: no transition";
-      const nextHistory = [...history, nextMsg];
+      const nextHistory = [...historyRef.current, nextMsg];
 
       setTmConfigs(nextConfigs);
       setActiveStates(active);
@@ -547,6 +1228,8 @@ function AutomataEditor() {
         activeStates: active,
         pdaConfigs: [],
         tmConfigs: nextConfigs,
+        tmPathConfigs: moved,
+        tmPathNodes: movedNodes,
         simMessage: nextMsg,
         history: nextHistory,
       });
@@ -567,25 +1250,38 @@ function AutomataEditor() {
 
     // ── PDA step ──
     if (isPdaMode) {
-      const currentConfigs = pdaConfigsRef.current;
+      const nextStepIndex = idx + 1;
+      const currentPathNodes = pdaPathNodesRef.current.length > 0
+        ? pdaPathNodesRef.current
+        : buildFallbackPdaPathNodes(pdaConfigsRef.current, idx);
       if (idx >= str.length) {
         setIsRunning(false);
         return false;
       }
       const char = str[idx];
       const usedEdgeIds = new Set<string>();
-      const moved: PdaConfig[] = [];
+      const movedNodes: PdaPathNode[] = [];
 
-      currentConfigs.forEach((cfg) => {
+      currentPathNodes.forEach((pathNode) => {
+        const cfg = pdaConfigFromPathNode(pathNode);
         const outgoing = currentEdges.filter((e) => e.source === cfg.state);
         outgoing.forEach((edge) => {
-          const rules = parsePdaRules(edge.label as string).filter(
+          const rules = parsePdaRules(edge.label as string, pdaSettings).filter(
             (r) => normalizeEpsilonSymbol(r.input) === char
           );
           rules.forEach((rule) => {
-            const next = applyPdaRule(cfg, edge.target, rule);
+            const next = applyPdaRule(cfg, edge.target, rule, pdaSettings);
             if (!next) return;
-            moved.push(next);
+            movedNodes.push({
+              id: createPathNodeId("pda"),
+              parentId: pathNode.id,
+              stepIndex: nextStepIndex,
+              state: next.state,
+              stack: [...next.stack],
+              stacks: getPdaConfigStores(next, pdaSettings).map((store) => [...store]),
+              storageModel: pdaSettings.storageModel,
+              transitionLabel: `Read '${char}'`,
+            });
             if (edge.id) usedEdgeIds.add(edge.id);
           });
         });
@@ -593,18 +1289,21 @@ function AutomataEditor() {
 
       flashEdges(usedEdgeIds, 400);
 
-      const closed = expandPdaEpsilonClosure(moved, currentEdges);
+      const closedNodes = expandPdaPathNodes(movedNodes, currentEdges);
+      const closedPaths = closedNodes.map((node) => pdaConfigFromPathNode(node));
+      pdaPathNodesRef.current = clonePdaPathNodes(closedNodes);
+      pdaPathConfigsRef.current = clonePdaConfigs(closedPaths);
+      const closed = dedupePdaConfigs(closedPaths);
       const active = new Set(closed.map((c) => c.state));
-      const nextStepIndex = idx + 1;
       const sample = closed
         .slice(0, 3)
-        .map((c) => `${c.state}:[${c.stack.join("") || "\u03b5"}]`)
+        .map((c) => formatPdaConfigSummary(c))
         .join(" | ");
       const nextMsg = `Read '${char}' -> ${closed.length} cfg${
         closed.length !== 1 ? "s" : ""
       }: ${sample}${closed.length > 3 ? " ..." : ""}`;
       const nextHistory = [
-        ...history,
+        ...historyRef.current,
         `Read '${char}' -> ${sample}${closed.length > 3 ? " ..." : ""}`,
       ];
       setPdaConfigs(closed);
@@ -617,6 +1316,8 @@ function AutomataEditor() {
         activeStates: active,
         pdaConfigs: closed,
         tmConfigs: [],
+        pdaPathConfigs: closedPaths,
+        pdaPathNodes: closedNodes,
         simMessage: nextMsg,
         history: nextHistory,
       });
@@ -681,7 +1382,7 @@ function AutomataEditor() {
       ", "
     )}}`;
     const nextHistory = [
-      ...history,
+      ...historyRef.current,
       `Read '${char}'${outputInfo} -> {${Array.from(finalSet).join(", ")}}`,
     ];
     setActiveStates(finalSet);
@@ -706,24 +1407,21 @@ function AutomataEditor() {
     if (targetIdx < 0 || targetIdx >= simTimeline.length) return;
     
     // Pause any running loop
-    if (runLoopRef.current !== null) {
-      window.clearInterval(runLoopRef.current);
-      runLoopRef.current = null;
-    }
+    clearRunLoop();
     
     const snap = simTimeline[targetIdx];
     setTimelineIndex(targetIdx);
     setStepIndex(snap.stepIndex);
     setActiveStates(new Set(snap.activeStates));
-    setPdaConfigs(
-      snap.pdaConfigs.map((cfg) => ({ state: cfg.state, stack: [...cfg.stack] }))
+    setPdaConfigs(clonePdaConfigs(snap.pdaConfigs));
+    setTmConfigs(cloneTmConfigs(snap.tmConfigs));
+    pdaPathConfigsRef.current = clonePdaConfigs(snap.pdaPathConfigs ?? snap.pdaConfigs);
+    tmPathConfigsRef.current = cloneTmConfigs(snap.tmPathConfigs ?? snap.tmConfigs);
+    pdaPathNodesRef.current = clonePdaPathNodes(
+      snap.pdaPathNodes ?? buildFallbackPdaPathNodes(snap.pdaPathConfigs ?? snap.pdaConfigs, snap.stepIndex)
     );
-    setTmConfigs(
-      snap.tmConfigs.map((cfg) => ({
-        state: cfg.state,
-        tapes: cfg.tapes.map(t => [...t]),
-        heads: [...cfg.heads],
-      }))
+    tmPathNodesRef.current = cloneTmPathNodes(
+      snap.tmPathNodes ?? buildFallbackTmPathNodes(snap.tmPathConfigs ?? snap.tmConfigs, snap.stepIndex)
     );
     setSimMessage(snap.simMessage);
     setHistory(snap.history);
@@ -732,10 +1430,7 @@ function AutomataEditor() {
 
   const prevStep = () => {
     if (simTimeline.length <= 1) return;
-    if (runLoopRef.current !== null) {
-      window.clearInterval(runLoopRef.current);
-      runLoopRef.current = null;
-    }
+    clearRunLoop();
     
     // Non-destructive: navigate backward without removing snapshots
     const currentPos = timelineIndex === -1 ? simTimeline.length - 1 : timelineIndex;
@@ -758,15 +1453,17 @@ function AutomataEditor() {
   };
 
   const stopSimulation = () => {
-    if (runLoopRef.current !== null) {
-      window.clearInterval(runLoopRef.current);
-      runLoopRef.current = null;
-    }
+    clearRunLoop();
     setIsRunning(false);
     setStepIndex(-1);
     setActiveStates(new Set());
     setPdaConfigs([]);
     setTmConfigs([]);
+    pdaPathConfigsRef.current = [];
+    tmPathConfigsRef.current = [];
+    pdaPathNodesRef.current = [];
+    tmPathNodesRef.current = [];
+    nextPathNodeIdRef.current = 0;
     setSimTimeline([]);
     setTimelineIndex(-1);
     setSimMessage("Ready");
@@ -775,11 +1472,42 @@ function AutomataEditor() {
 
   /** Pause the auto-run */
   const pauseSimulation = () => {
-    if (runLoopRef.current !== null) {
-      window.clearInterval(runLoopRef.current);
-      runLoopRef.current = null;
-    }
+    clearRunLoop();
     // Keep isRunning true so user can resume
+  };
+
+  const scheduleAutoRun = (initialDelayMs: number = 100) => {
+    clearRunLoop();
+    setIsAutoRunning(true);
+
+    const tick = () => {
+      const currentIdx = stepIndexRef.current;
+      if (!isTmMode && currentIdx >= inputString.length) {
+        clearRunLoop();
+        setIsRunning(false);
+        return;
+      }
+      if (isTmMode && currentIdx >= TM_MAX_STEPS) {
+        clearRunLoop();
+        setIsRunning(false);
+        setSimMessage(`TM stopped at max steps (${TM_MAX_STEPS})`);
+        return;
+      }
+
+      const ok = executeStep();
+      if (!ok) {
+        clearRunLoop();
+        setIsRunning(false);
+        return;
+      }
+
+      runLoopRef.current = window.setTimeout(
+        tick,
+        getPlaybackDelayMs(playbackSpeedRef.current)
+      );
+    };
+
+    runLoopRef.current = window.setTimeout(tick, initialDelayMs);
   };
 
   /** Run to end from current position */
@@ -796,38 +1524,7 @@ function AutomataEditor() {
       if (!startSimulation()) return;
     }
     
-    if (runLoopRef.current !== null) {
-      window.clearInterval(runLoopRef.current);
-      runLoopRef.current = null;
-    }
-    setTimeout(() => {
-      runLoopRef.current = window.setInterval(() => {
-        const currentIdx = stepIndexRef.current;
-        if (!isTmMode && currentIdx >= inputString.length) {
-          if (runLoopRef.current !== null) {
-            window.clearInterval(runLoopRef.current);
-            runLoopRef.current = null;
-          }
-          setIsRunning(false);
-          return;
-        }
-        if (isTmMode && currentIdx >= TM_MAX_STEPS) {
-          if (runLoopRef.current !== null) {
-            window.clearInterval(runLoopRef.current);
-            runLoopRef.current = null;
-          }
-          setIsRunning(false);
-          setSimMessage(`TM stopped at max steps (${TM_MAX_STEPS})`);
-          return;
-        }
-        const ok = executeStep();
-        if (!ok && runLoopRef.current !== null) {
-          window.clearInterval(runLoopRef.current);
-          runLoopRef.current = null;
-          setIsRunning(false);
-        }
-      }, 500);
-    }, 100);
+    scheduleAutoRun();
   };
 
   // ─── Sidebar resizer ───
@@ -835,6 +1532,8 @@ function AutomataEditor() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toolbarOpen, setToolbarOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [pdaSettingsModalOpen, setPdaSettingsModalOpen] = useState(false);
+  const [tmSettingsModalOpen, setTmSettingsModalOpen] = useState(false);
   const isResizingRef = useRef(false);
 
   const startResizing = React.useCallback(() => {
@@ -863,6 +1562,91 @@ function AutomataEditor() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const selectedEdgeIdRef = useRef<string | null>(null);
   const promptOpenRef = useRef(false);
+
+  type VisualizerDraft = {
+    mode?: ModeType;
+    pdaAcceptMode?: PdaAcceptMode;
+    pdaSettings?: PdaSettings;
+    tmAcceptMode?: TmAcceptMode;
+    tmSettings?: TmSettings;
+    inputString?: string;
+    sidebarWidth?: number;
+    nodeCount?: number;
+    nodes?: Node[];
+    edges?: Edge[];
+    stepIndex?: number;
+    activeStates?: string[];
+    pdaConfigs?: PdaConfig[];
+    tmConfigs?: TmConfig[];
+    pdaPathConfigs?: PdaConfig[];
+    tmPathConfigs?: TmConfig[];
+    pdaPathNodes?: PdaPathNode[];
+    tmPathNodes?: TmPathNode[];
+    nextPathNodeId?: number;
+    simTimeline?: SimSnapshot[];
+    timelineIndex?: number;
+    simMessage?: string;
+    history?: string[];
+    outputString?: string;
+    isRunning?: boolean;
+  };
+
+  const buildDraftPayload = React.useCallback((): VisualizerDraft => ({
+    mode,
+    pdaAcceptMode,
+    pdaSettings,
+    tmAcceptMode,
+    tmSettings,
+    inputString,
+    sidebarWidth,
+    nodeCount,
+    nodes: nodesRef.current,
+    edges: edgesRef.current,
+    stepIndex,
+    activeStates: Array.from(activeStatesRef.current),
+    pdaConfigs: clonePdaConfigs(pdaConfigsRef.current),
+    tmConfigs: cloneTmConfigs(tmConfigsRef.current),
+    pdaPathConfigs: clonePdaConfigs(pdaPathConfigsRef.current),
+    tmPathConfigs: cloneTmConfigs(tmPathConfigsRef.current),
+    pdaPathNodes: clonePdaPathNodes(pdaPathNodesRef.current),
+    tmPathNodes: cloneTmPathNodes(tmPathNodesRef.current),
+    nextPathNodeId: nextPathNodeIdRef.current,
+    simTimeline: cloneSimTimeline(simTimeline),
+    timelineIndex,
+    simMessage,
+    history: [...historyRef.current],
+    outputString,
+    isRunning,
+  }), [
+    clonePdaConfigs,
+    cloneTmConfigs,
+    clonePdaPathNodes,
+    cloneTmPathNodes,
+    cloneSimTimeline,
+    inputString,
+    isRunning,
+    mode,
+    nodeCount,
+    outputString,
+    pdaAcceptMode,
+    pdaSettings,
+    sidebarWidth,
+    simMessage,
+    simTimeline,
+    stepIndex,
+    timelineIndex,
+    tmAcceptMode,
+    tmSettings,
+  ]);
+
+  const persistDraftNow = () => {
+    try {
+      localStorage.setItem(VISUALIZER_DRAFT_KEY, JSON.stringify(buildDraftPayload()));
+    } catch (err) {
+      console.warn("Failed to save visualizer draft", err);
+    }
+  };
+
   useEffect(() => {
     selectedEdgeIdRef.current = selectedEdgeId;
   }, [selectedEdgeId]);
@@ -1005,29 +1789,22 @@ function AutomataEditor() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [setEdges, setNodes]);
+  }, [isRunning, setEdges, setNodes]);
 
   // ─── Restore & persist draft ───
-  useEffect(() => {
+  useLayoutEffect(() => {
     try {
       const raw = localStorage.getItem(VISUALIZER_DRAFT_KEY);
       if (!raw) {
-        hasHydratedRef.current = true;
+        setIsDraftReady(true);
         return;
       }
-      const draft = JSON.parse(raw) as {
-        mode?: ModeType;
-        pdaAcceptMode?: PdaAcceptMode;
-        tmAcceptMode?: TmAcceptMode;
-        inputString?: string;
-        sidebarWidth?: number;
-        nodeCount?: number;
-        nodes?: Node[];
-        edges?: Edge[];
-      };
+      const draft = JSON.parse(raw) as VisualizerDraft;
       if (draft.mode) setMode(draft.mode);
       if (draft.pdaAcceptMode) setPdaAcceptMode(draft.pdaAcceptMode);
+      if (draft.pdaSettings) setPdaSettings(normalizePdaSettings(draft.pdaSettings));
       if (draft.tmAcceptMode) setTmAcceptMode(draft.tmAcceptMode);
+      if (draft.tmSettings) setTmSettings(normalizeTmSettings(draft.tmSettings));
       if (typeof draft.inputString === "string") setInputString(draft.inputString);
       if (
         typeof draft.sidebarWidth === "number" &&
@@ -1115,7 +1892,10 @@ function AutomataEditor() {
               type: "stateNode",
               data: {
                 ...(n.data || {}),
-                label: n.id,
+                label:
+                  typeof (n.data as { label?: string })?.label === "string"
+                    ? (n.data as { label?: string }).label
+                    : n.id,
                 isStart: !!(n.data as { isStart?: boolean })?.isStart,
                 isAccept: !!(n.data as { isAccept?: boolean })?.isAccept,
                 isActive: false,
@@ -1151,29 +1931,41 @@ function AutomataEditor() {
           })
         );
       }
+
+      if (typeof draft.stepIndex === "number") setStepIndex(draft.stepIndex);
+      if (Array.isArray(draft.activeStates)) setActiveStates(new Set(draft.activeStates));
+      if (Array.isArray(draft.pdaConfigs)) setPdaConfigs(clonePdaConfigs(draft.pdaConfigs));
+      if (Array.isArray(draft.tmConfigs)) setTmConfigs(cloneTmConfigs(draft.tmConfigs));
+      pdaPathConfigsRef.current = Array.isArray(draft.pdaPathConfigs) ? clonePdaConfigs(draft.pdaPathConfigs) : [];
+      tmPathConfigsRef.current = Array.isArray(draft.tmPathConfigs) ? cloneTmConfigs(draft.tmPathConfigs) : [];
+      pdaPathNodesRef.current = Array.isArray(draft.pdaPathNodes) ? clonePdaPathNodes(draft.pdaPathNodes) : [];
+      tmPathNodesRef.current = Array.isArray(draft.tmPathNodes) ? cloneTmPathNodes(draft.tmPathNodes) : [];
+      nextPathNodeIdRef.current = typeof draft.nextPathNodeId === "number" ? draft.nextPathNodeId : 0;
+      if (Array.isArray(draft.simTimeline)) setSimTimeline(cloneSimTimeline(draft.simTimeline));
+      if (typeof draft.timelineIndex === "number") setTimelineIndex(draft.timelineIndex);
+      if (typeof draft.simMessage === "string") setSimMessage(draft.simMessage);
+      if (Array.isArray(draft.history)) setHistory([...draft.history]);
+      if (typeof draft.outputString === "string") setOutputString(draft.outputString);
+      if (typeof draft.isRunning === "boolean") setIsRunning(draft.isRunning);
+      setIsAutoRunning(false);
     } catch (err) {
       console.warn("Failed to restore visualizer draft", err);
     } finally {
-      hasHydratedRef.current = true;
+      setIsDraftReady(true);
     }
-  }, [setEdges, setNodes]);
+  }, [clonePdaConfigs, clonePdaPathNodes, cloneSimTimeline, cloneTmConfigs, cloneTmPathNodes, setEdges, setNodes]);
 
   useEffect(() => {
-    if (!hasHydratedRef.current) return;
+    if (!isDraftReady) return;
     try {
-      localStorage.setItem(
-        VISUALIZER_DRAFT_KEY,
-        JSON.stringify({ mode, pdaAcceptMode, tmAcceptMode, inputString, sidebarWidth, nodeCount, nodes, edges })
-      );
+      localStorage.setItem(VISUALIZER_DRAFT_KEY, JSON.stringify(buildDraftPayload()));
     } catch (err) {
       console.warn("Failed to save visualizer draft", err);
     }
-  }, [mode, pdaAcceptMode, tmAcceptMode, inputString, sidebarWidth, nodeCount, nodes, edges]);
+  }, [activeStates, buildDraftPayload, edges, history, isDraftReady, nodes, pdaConfigs, simTimeline, simMessage, stepIndex, timelineIndex, tmConfigs, outputString, isRunning]);
 
   // ─── Import / Export ───
-  // NOTE: The import/export JSON schema and localStorage data-transfer mechanism
-  // are intentionally kept unchanged so that files exported here remain compatible
-  // with the converter pages (nfa-to-dfa, enfa-to-dfa, etc.).
+  // NOTE: Converter-compatible fields stay unchanged. PDA/TM setup is stored as optional metadata.
 
   const exportConfig = async () => {
     const stateNodes = getStateNodes(nodes);
@@ -1185,7 +1977,9 @@ function AutomataEditor() {
         name: `My_${mode}`,
         type: mode,
         pdaAcceptMode: isPdaMode ? pdaAcceptMode : undefined,
+        pdaSettings: isPdaMode ? pdaSettings : undefined,
         tmAcceptMode: isTmMode ? tmAcceptMode : undefined,
+        tmSettings: isTmMode ? tmSettings : undefined,
         exportedAt: new Date().toISOString(),
       },
       nodes: stateNodes.map((n) => ({
@@ -1194,6 +1988,10 @@ function AutomataEditor() {
         isStart: n.data.isStart,
         isAccept: n.data.isAccept,
         data: {
+          label:
+            typeof (n.data as { label?: string } | undefined)?.label === "string"
+              ? (n.data as { label?: string }).label
+              : n.id,
           layer: Number((n.data as { layer?: number })?.layer || 0),
         },
       })),
@@ -1244,7 +2042,7 @@ function AutomataEditor() {
     try {
       // @ts-expect-error - showSaveFilePicker is not yet in standard lib dom types
       if (window.showSaveFilePicker) {
-        // @ts-expect-error
+        // @ts-expect-error - showSaveFilePicker is not yet in standard lib dom types
         const handle = await window.showSaveFilePicker({
           suggestedName: `${defaultName}.json`,
           types: [
@@ -1291,19 +2089,34 @@ function AutomataEditor() {
   const importFromJsonString = async (content: string) => {
       try {
         const parsedData = JSON.parse(content) as ImportData;
+        const importedMetadata = parsedData.metadata || {};
 
         let currentMode = mode;
-        if (parsedData.metadata?.type) {
-          currentMode = parsedData.metadata.type as ModeType;
+        const importedMode = importedMetadata.type ?? parsedData.type;
+        if (importedMode) {
+          currentMode = importedMode as ModeType;
           setMode(currentMode);
         }
+
+        const importedPdaAcceptMode =
+          importedMetadata.pdaAcceptMode ?? parsedData.pdaAcceptMode ?? "final-state";
+        const importedTmAcceptMode =
+          importedMetadata.tmAcceptMode ?? parsedData.tmAcceptMode ?? "final-state";
+        const importedPdaSettings = normalizePdaSettings(
+          importedMetadata.pdaSettings ?? parsedData.pdaSettings
+        );
+        const importedTmSettings = normalizeTmSettings(
+          importedMetadata.tmSettings ?? parsedData.tmSettings
+        );
         
-        // Restore acceptance modes if present
-        if (parsedData.metadata?.pdaAcceptMode) {
-          setPdaAcceptMode(parsedData.metadata.pdaAcceptMode);
+        // Restore or reset mode-specific setup so imports never inherit stale settings
+        if (currentMode === "DPDA" || currentMode === "NPDA") {
+          setPdaAcceptMode(importedPdaAcceptMode);
+          setPdaSettings(importedPdaSettings);
         }
-        if (parsedData.metadata?.tmAcceptMode) {
-          setTmAcceptMode(parsedData.metadata.tmAcceptMode);
+        if (currentMode === "DTM" || currentMode === "NTM" || currentMode === "LBA") {
+          setTmAcceptMode(importedTmAcceptMode);
+          setTmSettings(importedTmSettings);
         }
 
         let maxId = 0;
@@ -1311,12 +2124,16 @@ function AutomataEditor() {
           (n: ImportNode) => {
             const idNum = parseInt(n.id.replace("q", ""));
             if (!isNaN(idNum) && idNum > maxId) maxId = idNum;
+            const importedLabel =
+              (typeof n.data?.label === "string" && n.data.label.trim()) ||
+              (typeof n.label === "string" && n.label.trim()) ||
+              n.id;
             return {
               id: n.id,
               position: n.position || { x: 50, y: 50 },
               type: "stateNode",
               data: {
-                label: n.id,
+                label: importedLabel,
                 isStart: n.isStart ?? n.data?.isStart ?? false,
                 isAccept: n.isAccept ?? n.data?.isAccept ?? false,
                 isActive: false,
@@ -2116,7 +2933,7 @@ function AutomataEditor() {
 
     if (fromPda && (nextMode === "NFA" || nextMode === "DFA")) {
       const epsilonPdaEdges = edges.filter((edge) => {
-        const rules = parsePdaRules((edge.label as string) || "");
+        const rules = parsePdaRules((edge.label as string) || "", pdaSettings);
         if (rules.length === 0) return false;
         return rules.some(
           (rule) => normalizeEpsilonSymbol(rule.input) === "\u03b5"
@@ -2135,7 +2952,7 @@ function AutomataEditor() {
 
     if (fromPda && toFa) {
       const pdaLikeEdges = edges.filter(
-        (e) => parsePdaRules((e.label as string) || "").length > 0
+        (e) => parsePdaRules((e.label as string) || "", pdaSettings).length > 0
       );
       if (pdaLikeEdges.length > 0) {
         const confirm = await uiSwal.fire({
@@ -2156,7 +2973,8 @@ function AutomataEditor() {
             const before = String(edge.label || "");
             const convertedLabel = toFaLabelFromPda(
               (edge.label as string) || "",
-              nextMode
+              nextMode,
+              pdaSettings
             );
             if (before !== convertedLabel) convertedCount += 1;
             if (String(convertedLabel).trim() === "") removedCount += 1;
@@ -2180,7 +2998,7 @@ function AutomataEditor() {
     if (fromFa && toPda) {
       const faLikeEdges = edges.filter((e) => {
         const txt = String(e.label || "").trim();
-        return txt !== "" && parsePdaRules(txt).length === 0;
+        return txt !== "" && parsePdaRules(txt, pdaSettings).length === 0;
       });
       if (faLikeEdges.length > 0) {
         const confirm = await uiSwal.fire({
@@ -2197,7 +3015,7 @@ function AutomataEditor() {
         let convertedCount = 0;
         const convertedEdges = edges.map((edge) => {
           const before = String(edge.label || "");
-          const convertedLabel = toPdaLabelFromFa(before);
+          const convertedLabel = toPdaLabelFromFa(before, pdaSettings);
           if (before !== convertedLabel) convertedCount += 1;
           return {
             ...edge,
@@ -2219,17 +3037,43 @@ function AutomataEditor() {
     stopSimulation();
   };
 
-  const showHelp = () => {
+  const openHelpDocs = () => {
+    persistDraftNow();
+    const helpWindow = window.open(
+      HELP_GUIDE_PATH,
+      "_blank",
+      "noopener,noreferrer"
+    );
+    if (!helpWindow) {
+      window.location.assign(HELP_GUIDE_PATH);
+    }
+  };
+
+  const showAbout = () => {
     uiSwal.fire({
-      title: "Quick Help",
+      title: "About Automata Visualizer",
       html: `
         <div style="text-align:left;line-height:1.6">
+          <div style="margin-bottom:10px;color:#94a3b8;"><strong>Version:</strong> v${packageJson.version}</div>
+          <div style="margin-bottom:12px;color:#cbd5e1;">
+            Quick reference for the editor. For the full manual, open
+            <a href="${HELP_GUIDE_PATH}" target="_blank" rel="noopener noreferrer" style="color:#38bdf8;text-decoration:none;font-weight:700;"> Help </a>
+            to view the detailed HTML guide.
+          </div>
           <div><strong>Basics</strong></div>
           <ul style="margin:6px 0 10px 18px;padding:0;">
             <li>Double-click state to toggle Start/Accept</li>
             <li>Drag between handles to create transition</li>
             <li>Double-click edge to edit label</li>
-            <li>TM label format: read-&gt;write,move (e.g. 0-&gt;1,R)</li>
+            <li>TM label format: read-&gt;write,move or read/write,move (e.g. 0-&gt;1,R or 0/1,R)</li>
+            <li>TM tuple length follows total head-track lanes, grouped by head (e.g. H1-&gt;T1+T2 and H2-&gt;T3 gives 3 slots)</li>
+            <li>2D Sheet extension adds U/D moves with a flattened matrix backing store</li>
+            <li>RAM extension adds absolute jumps like @12</li>
+            <li>State Storage reads label suffixes like qCarry{a} for lightweight memory in the state name</li>
+            <li>PDA classic format: input,pop-&gt;push or input,pop/push (Z, Z0, Z₀ all work as stack start)</li>
+            <li>Multi-stack PDA format: input,(pop1,pop2,...)-&gt;(push1,push2,...)</li>
+            <li>Queue automata uses input,pop-&gt;push, where pop dequeues the front and push appends to the rear</li>
+            <li>Nested stack mode accepts bracketed frame tokens such as [AZ]</li>
           </ul>
           <div><strong>Shortcuts</strong></div>
           <ul style="margin:6px 0 0 18px;padding:0;">
@@ -2237,7 +3081,7 @@ function AutomataEditor() {
             <li>Ctrl+B: Previous Step</li>
             <li>Ctrl+Z / Ctrl+Y: Undo / Redo</li>
             <li>Ctrl+Shift+Backspace: Clear Board</li>
-            <li>Ctrl+/ or F1: Help</li>
+            <li>Ctrl+/ or F1: Open Help Guide</li>
             <li>Delete / Backspace: Delete selected</li>
           </ul>
         </div>
@@ -2250,7 +3094,7 @@ function AutomataEditor() {
     clearBoardActionRef.current = () => {
       void clearBoard();
     };
-    helpActionRef.current = showHelp;
+    helpActionRef.current = openHelpDocs;
   });
 
   // ─── Floating prompt state ───
@@ -2268,18 +3112,18 @@ function AutomataEditor() {
 
   const openEdgeLabelPrompt = (params: Connection) => {
     const defaultValue = isTmMode
-      ? "0->1,R"
+      ? getDefaultTmRuleLabel(tmSettings)
       : isPdaMode
-      ? "a,Z->AZ"
+      ? getDefaultPdaRuleLabel(pdaSettings)
       : isMealyMoore
       ? "a/0"
       : isTimed
       ? "a, x<5, x"
       : "0";
     const title = isTmMode
-      ? 'Input TM rule(s) (e.g. "0->1,R; B->B,L" — B = blank)'
+      ? getTmRulePromptTitle("Input", tmSettings)
       : isPdaMode
-      ? 'Input PDA rule(s) (e.g. "a,Z->AZ; b,Z->Z")'
+      ? getPdaRulePromptTitle("Input", pdaSettings)
       : isMealyMoore
       ? 'Input Mealy rule(s) (e.g. "a/0; b/1" — input/output)'
       : isTimed
@@ -2304,9 +3148,9 @@ function AutomataEditor() {
       params: edge,
       defaultValue: def,
       title: isTmMode
-        ? 'Edit TM rule(s) (e.g. "0->1,R; B->B,L" — B = blank)'
+        ? getTmRulePromptTitle("Edit", tmSettings)
         : isPdaMode
-        ? 'Edit PDA rule(s) (e.g. "a,Z->AZ; b,Z->Z")'
+        ? getPdaRulePromptTitle("Edit", pdaSettings)
         : isMealyMoore
         ? 'Edit Mealy rule(s) (e.g. "a/0; b/1" — input/output)'
         : isTimed
@@ -2340,17 +3184,35 @@ function AutomataEditor() {
       if (value !== null) {
         const conn = params as Connection;
         let nextValue = value;
-        if (isTmMode && !isValidTmLabel(nextValue)) {
+        if (isTmMode && !isValidTmLabel(nextValue, getTmRuleArity(tmSettings))) {
           uiSwal.fire(
             "Error",
-            "Invalid TM label. Use format: read->write,move and separate multiple rules with ;",
+            `Invalid TM label. Use ${getTmRuleArity(tmSettings)} read/write/move slot(s) for the active TM setup.`,
             "error"
           );
           closePrompt();
           return;
         }
-        if (isPdaMode && !isValidPdaLabel(nextValue)) {
-          const converted = tryConvertNfaShorthandToPda(nextValue);
+        if (isTmMode) {
+          const unsupportedMoves = getTmUnsupportedMoves(nextValue, tmSettings);
+          const trackRuleIssues = getTmTrackRuleIssues(nextValue, tmSettings);
+          if (unsupportedMoves.length > 0) {
+            uiSwal.fire(
+              "Error",
+              `Move(s) ${unsupportedMoves.join(", ")} require enabling the matching TM extension in TM Setup.`,
+              "error"
+            );
+            closePrompt();
+            return;
+          }
+          if (trackRuleIssues.length > 0) {
+            uiSwal.fire("Error", trackRuleIssues[0], "error");
+            closePrompt();
+            return;
+          }
+        }
+        if (isPdaMode && !isValidPdaLabel(nextValue, pdaSettings)) {
+          const converted = tryConvertNfaShorthandToPda(nextValue, pdaSettings);
           if (converted) {
             const confirm = await uiSwal.fire({
               icon: "warning",
@@ -2368,7 +3230,7 @@ function AutomataEditor() {
           } else {
             uiSwal.fire(
               "Error",
-              "Invalid PDA label. Use format: input,pop->push and separate multiple rules with ;",
+              `Invalid ${formatPdaExtensionSummary(pdaSettings)} label. ${getPdaRulePromptTitle("Input", pdaSettings)}`,
               "error"
             );
             closePrompt();
@@ -2453,17 +3315,35 @@ function AutomataEditor() {
       const edge = params as Edge;
       if (value !== null) {
         let nextValue = value;
-        if (isTmMode && !isValidTmLabel(nextValue)) {
+        if (isTmMode && !isValidTmLabel(nextValue, getTmRuleArity(tmSettings))) {
           uiSwal.fire(
             "Error",
-            "Invalid TM label. Use format: read->write,move and separate multiple rules with ;",
+            `Invalid TM label. Use ${getTmRuleArity(tmSettings)} read/write/move slot(s) for the active TM setup.`,
             "error"
           );
           closePrompt();
           return;
         }
-        if (isPdaMode && !isValidPdaLabel(nextValue)) {
-          const converted = tryConvertNfaShorthandToPda(nextValue);
+        if (isTmMode) {
+          const unsupportedMoves = getTmUnsupportedMoves(nextValue, tmSettings);
+          const trackRuleIssues = getTmTrackRuleIssues(nextValue, tmSettings);
+          if (unsupportedMoves.length > 0) {
+            uiSwal.fire(
+              "Error",
+              `Move(s) ${unsupportedMoves.join(", ")} require enabling the matching TM extension in TM Setup.`,
+              "error"
+            );
+            closePrompt();
+            return;
+          }
+          if (trackRuleIssues.length > 0) {
+            uiSwal.fire("Error", trackRuleIssues[0], "error");
+            closePrompt();
+            return;
+          }
+        }
+        if (isPdaMode && !isValidPdaLabel(nextValue, pdaSettings)) {
+          const converted = tryConvertNfaShorthandToPda(nextValue, pdaSettings);
           if (converted) {
             const confirm = await uiSwal.fire({
               icon: "warning",
@@ -2481,7 +3361,7 @@ function AutomataEditor() {
           } else {
             uiSwal.fire(
               "Error",
-              "Invalid PDA label. Use format: input,pop->push and separate multiple rules with ;",
+              `Invalid ${formatPdaExtensionSummary(pdaSettings)} label. ${getPdaRulePromptTitle("Edit", pdaSettings)}`,
               "error"
             );
             closePrompt();
@@ -2750,7 +3630,7 @@ function AutomataEditor() {
     });
     edges.forEach((e) => {
       if (isTmMode) {
-        const rules = parseTmRules(e.label as string);
+        const rules = parseTmRules(e.label as string, getTmRuleArity(tmSettings));
         rules.forEach((rule) => {
           if (!map[e.source]) return;
           const key = rule.reads[0];
@@ -2758,7 +3638,7 @@ function AutomataEditor() {
           map[e.source][key].push(e.target);
         });
       } else if (isPdaMode) {
-        const rules = parsePdaRules(e.label as string);
+        const rules = parsePdaRules(e.label as string, pdaSettings);
         rules.forEach((rule) => {
           if (!map[e.source]) return;
           const key = rule.input === "e" ? "\u03b5" : rule.input;
@@ -2804,11 +3684,17 @@ function AutomataEditor() {
   const isTmHalted = (): boolean => {
     if (!isTmMode || tmConfigs.length === 0) return false;
     return tmConfigs.every((cfg) => {
-      const currentSym = cfg.tapes[0]?.[cfg.heads[0]] ?? TM_BLANK;
+      const currentSyms = getTmReadSymbols(cfg, tmSettings);
       const outEdges = edges.filter((e) => e.source === cfg.state);
       const matchingRules = outEdges.flatMap((e) => {
-        const rules = parseTmRules(e.label as string);
-        return rules.filter((r) => r.reads[0] === currentSym);
+        const rules = parseTmRules(e.label as string, getTmRuleArity(tmSettings));
+        return rules.filter(
+          (r) =>
+            isTmRuleEnabled(r, tmSettings) &&
+            !hasTrackMoveMismatch(r, tmSettings) &&
+            r.reads.length === currentSyms.length &&
+            r.reads.every((read, index) => read === currentSyms[index])
+        );
       });
       return matchingRules.length === 0;
     });
@@ -2837,9 +3723,7 @@ function AutomataEditor() {
     // PDA acceptance
     if (isPdaMode) {
       const inFinalState = pdaConfigs.some((cfg) => acceptNodeIds.includes(cfg.state));
-      const hasEmptyStack = pdaConfigs.some((cfg) => 
-        cfg.stack.length === 0 || (cfg.stack.length === 1 && cfg.stack[0] === PDA_STACK_START)
-      );
+      const hasEmptyStack = pdaConfigs.some((cfg) => isPdaStoreEmpty(cfg, pdaSettings));
       
       if (pdaAcceptMode === "empty-stack") {
         return hasEmptyStack;
@@ -2860,8 +3744,30 @@ function AutomataEditor() {
     return Array.from(activeStates).some((id) => acceptNodeIds.includes(id));
   };
 
+  if (!isDraftReady) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "linear-gradient(135deg, #0b1220 0%, #111827 100%)",
+          color: "#e2e8f0",
+        }}
+      >
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 28, marginBottom: 12 }}>Restoring saved visualizer...</div>
+          <div style={{ fontSize: 14, color: "#94a3b8" }}>
+            Loading your last automata board from this browser session.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div
+    <main
       className="visualizer-root"
       style={{
         width: "100vw",
@@ -2889,6 +3795,35 @@ function AutomataEditor() {
         onImport={importFromJsonString}
         isRunning={isRunning}
       />
+
+      {pdaSettingsModalOpen && (
+        <PdaSettingsModal
+          open={pdaSettingsModalOpen}
+          onClose={() => setPdaSettingsModalOpen(false)}
+          onSave={(settings: PdaSettings) => {
+            updatePdaSettings(settings);
+            setPdaSettingsModalOpen(false);
+            if (isRunning || stepIndex >= 0) stopSimulation();
+          }}
+          initialSettings={pdaSettings}
+          isRunning={isRunning}
+        />
+      )}
+
+      {tmSettingsModalOpen && (
+        <TmSettingsModal
+          open={tmSettingsModalOpen}
+          onClose={() => setTmSettingsModalOpen(false)}
+          onSave={(settings) => {
+            updateTmSettings(settings);
+            setTmSettingsModalOpen(false);
+            if (isRunning || stepIndex >= 0) stopSimulation();
+          }}
+          initialSettings={tmSettings}
+          inputString={inputString}
+          isRunning={isRunning}
+        />
+      )}
 
       {/* Floating Prompt Modal */}
       <PromptModal
@@ -2928,7 +3863,9 @@ function AutomataEditor() {
               ←
             </button>
           </Link>
-          <span style={{ fontWeight: 700, fontSize: 15, color: "#0ea5e9", marginRight: 2 }}>AutomataViz</span>
+          <h1 style={{ fontWeight: 700, fontSize: 15, color: "#0ea5e9", marginRight: 2, lineHeight: 1.2 }}>
+            AutomataViz
+          </h1>
 
           {/* Mode selector */}
           <div style={{ display: "flex", flexDirection: "column" }}>
@@ -2981,6 +3918,53 @@ function AutomataEditor() {
             </div>
           )}
 
+          {isPdaMode && (
+            <>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <label style={{ fontSize: 9, color: "#94a3b8", lineHeight: 1 }}>PDA SETUP</label>
+                <button
+                  onClick={() => setPdaSettingsModalOpen(true)}
+                  disabled={isRunning}
+                  style={{
+                    background: isRunning ? "#1e293b" : "#334155",
+                    color: isRunning ? "#64748b" : "#e2e8f0",
+                    border: "1px solid #475569",
+                    borderRadius: 4,
+                    padding: "4px 10px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: isRunning ? "default" : "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {pdaSettings.storageModel === "queue"
+                    ? "Queue"
+                    : pdaSettings.storageModel === "nested-stack"
+                    ? "Nested"
+                    : `${getPdaStoreCount(pdaSettings)} Stack`}
+                </button>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", minWidth: 170 }}>
+                <label style={{ fontSize: 9, color: "#94a3b8", lineHeight: 1 }}>EXTENSION</label>
+                <div style={{ fontSize: 11, color: "#e2e8f0", fontWeight: 600, lineHeight: 1.25 }}>
+                  {formatPdaExtensionSummary(pdaSettings)}
+                </div>
+                <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.25 }}>
+                  {pdaSettings.storageModel === "queue"
+                    ? "front dequeue • rear enqueue"
+                    : pdaSettings.storageModel === "nested-stack"
+                    ? "[frame] tokens enabled"
+                    : `${getPdaStoreCount(pdaSettings)} active store${
+                        getPdaStoreCount(pdaSettings) > 1 ? "s" : ""
+                      }`}
+                </div>
+                <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.25 }}>
+                  {getPdaRulePromptTitle("Input", pdaSettings)}
+                </div>
+              </div>
+            </>
+          )}
+
           {/* TM Accept Mode selector */}
           {isTmMode && (
             <div style={{ display: "flex", flexDirection: "column" }}>
@@ -3000,30 +3984,36 @@ function AutomataEditor() {
           {isTmMode && (
             <>
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <label style={{ fontSize: 9, color: "#94a3b8", lineHeight: 1 }}>TAPES</label>
-                <select
-                  value={tmSettings.tapeCount}
-                  onChange={(e) => updateTmSettings({ tapeCount: Number(e.target.value) })}
+                <label style={{ fontSize: 9, color: "#94a3b8", lineHeight: 1 }}>TM SETUP</label>
+                <button
+                  onClick={() => setTmSettingsModalOpen(true)}
                   disabled={isRunning}
-                  style={{ background: "#334155", color: "#e2e8f0", border: "none", padding: 0, fontSize: 11, fontWeight: 600, cursor: isRunning ? "default" : "pointer", opacity: isRunning ? 0.5 : 1 }}
+                  style={{
+                    background: isRunning ? "#1e293b" : "#334155",
+                    color: isRunning ? "#64748b" : "#e2e8f0",
+                    border: "1px solid #475569",
+                    borderRadius: 4,
+                    padding: "4px 10px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: isRunning ? "default" : "pointer",
+                    whiteSpace: "nowrap",
+                  }}
                 >
-                  {Array.from({ length: TM_MAX_TAPES }, (_, i) => i + 1).map(n => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
+                  {`${tmSettings.headCount}H / ${tmSettings.tapeCount}T`}
+                </button>
               </div>
-              <div style={{ display: "flex", flexDirection: "column" }}>
-                <label style={{ fontSize: 9, color: "#94a3b8", lineHeight: 1 }}>HEADS</label>
-                <select
-                  value={tmSettings.headCount}
-                  onChange={(e) => updateTmSettings({ headCount: Number(e.target.value) })}
-                  disabled={isRunning}
-                  style={{ background: "#334155", color: "#e2e8f0", border: "none", padding: 0, fontSize: 11, fontWeight: 600, cursor: isRunning ? "default" : "pointer", opacity: isRunning ? 0.5 : 1 }}
-                >
-                  {Array.from({ length: TM_MAX_HEADS }, (_, i) => i + 1).map(n => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
+              <div style={{ display: "flex", flexDirection: "column", minWidth: 170 }}>
+                <label style={{ fontSize: 9, color: "#94a3b8", lineHeight: 1 }}>HEAD MAP</label>
+                <div style={{ fontSize: 11, color: "#e2e8f0", fontWeight: 600, lineHeight: 1.25 }}>
+                  {formatTmHeadMapping(tmSettings)}
+                </div>
+                <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.25 }}>
+                  {formatTmInputModeLabel(tmSettings.inputMode)} input
+                </div>
+                <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.25 }}>
+                  {formatTmExtensionSummary(tmSettings)}
+                </div>
               </div>
             </>
           )}
@@ -3047,10 +4037,25 @@ function AutomataEditor() {
             <button onClick={prevStep} disabled={simTimeline.length <= 1} title="Previous step (non-destructive)" style={{ cursor: simTimeline.length > 1 ? "pointer" : "default", background: simTimeline.length > 1 ? "#2563eb" : "#1e293b", border: "none", padding: "5px 8px", borderRadius: 4, color: simTimeline.length > 1 ? "white" : "#64748b", fontSize: 12 }}>◀</button>
             <button onClick={nextStep} disabled={!isRunning && simTimeline.length === 0} title="Next step" style={{ cursor: "pointer", background: "#3b82f6", border: "none", padding: "5px 8px", borderRadius: 4, color: "white", fontSize: 12 }}>▶|</button>
             <button onClick={runAll} title="Run to end from current position" style={{ cursor: "pointer", background: "#22c55e", border: "none", padding: "5px 10px", borderRadius: 4, color: "white", fontWeight: 700, fontSize: 12 }}>⏩ Run</button>
-            {runLoopRef.current !== null && (
-              <button onClick={pauseSimulation} title="Pause auto-run" style={{ cursor: "pointer", background: "#f59e0b", border: "none", padding: "5px 8px", borderRadius: 4, color: "white", fontSize: 12 }}>⏸</button>
-            )}
+            <button onClick={pauseSimulation} disabled={!isAutoRunning} title="Pause auto-run" style={{ cursor: isAutoRunning ? "pointer" : "default", background: isAutoRunning ? "#f59e0b" : "#1e293b", border: "none", padding: "5px 8px", borderRadius: 4, color: isAutoRunning ? "white" : "#64748b", fontSize: 12 }}>⏸</button>
             <button onClick={stopSimulation} title="Reset simulation" style={{ cursor: "pointer", background: "#ef4444", border: "none", padding: "5px 8px", borderRadius: 4, color: "white", fontSize: 12 }}>⏹</button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderRadius: 4, border: "1px solid #334155", background: "#0f172a" }}>
+            <label htmlFor="playback-speed" style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>Speed</label>
+            <input
+              id="playback-speed"
+              type="range"
+              min={MIN_PLAYBACK_SPEED}
+              max={MAX_PLAYBACK_SPEED}
+              step={0.1}
+              value={playbackSpeed}
+              onChange={(e) => setPlaybackSpeed(Number(e.target.value))}
+              aria-label="Playback speed"
+              style={{ width: 96, cursor: "pointer" }}
+            />
+            <span style={{ minWidth: 88, textAlign: "right", color: "#e2e8f0", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
+              {formatPlaybackSpeed(playbackSpeed)} · {getPlaybackDelayMs(playbackSpeed)}ms
+            </span>
           </div>
 
           {/* Convert (conditional) */}
@@ -3058,7 +4063,15 @@ function AutomataEditor() {
             <Link
               href={mode === "eNFA" ? "/automata/converter/enfa-to-dfa" : "/automata/converter/nfa-to-dfa"}
               onClick={() => {
-                localStorage.setItem("automata-data-transfer", JSON.stringify({ source: "visualizer", nodes: getStateNodes(nodes), edges }));
+                persistDraftNow();
+                localStorage.setItem(
+                  "automata-data-transfer",
+                  JSON.stringify({
+                    source: "visualizer",
+                    nodes: getStateNodes(nodesRef.current),
+                    edges: edgesRef.current,
+                  })
+                );
               }}
               style={{ textDecoration: "none" }}
             >
@@ -3125,7 +4138,8 @@ function AutomataEditor() {
             <div style={{ width: 1, height: 20, background: "#475569" }} />
 
             <button disabled={isRunning} onClick={clearBoard} style={{ cursor: isRunning ? "default" : "pointer", background: isRunning ? "#1e293b" : "#475569", border: "none", padding: "5px 10px", borderRadius: 4, color: isRunning ? "#64748b" : "white", fontSize: 12 }}>🧹 Clear</button>
-            <button onClick={showHelp} title="Help (Ctrl+/ or F1)" style={{ cursor: "pointer", background: "#0f172a", border: "1px solid #475569", padding: "5px 10px", borderRadius: 4, color: "#e2e8f0", fontSize: 12 }}>❔ Help</button>
+            <button onClick={showAbout} title="About automata visualizer" style={{ cursor: "pointer", background: "#0f172a", border: "1px solid #475569", padding: "5px 10px", borderRadius: 4, color: "#e2e8f0", fontSize: 12 }}>ℹ About</button>
+            <Link href={HELP_GUIDE_PATH} target="_blank" rel="noopener noreferrer" onClick={() => persistDraftNow()} title="Open detailed Help guide (Ctrl+/ or F1)" style={{ display: "inline-flex", alignItems: "center", cursor: "pointer", background: "#0f172a", border: "1px solid #475569", padding: "5px 10px", borderRadius: 4, color: "#e2e8f0", fontSize: 12, textDecoration: "none" }}>❔ Help</Link>
             <button onClick={exportConfig} style={{ cursor: "pointer", background: "#8b5cf6", border: "none", padding: "5px 10px", borderRadius: 4, color: "white", fontSize: 12 }}>💾 Export</button>
             <button disabled={isRunning} onClick={() => setImportModalOpen(true)} style={{ cursor: isRunning ? "default" : "pointer", background: isRunning ? "#1e293b" : "#6366f1", border: "none", padding: "5px 10px", borderRadius: 4, color: isRunning ? "#64748b" : "white", fontSize: 12 }}>📂 Import</button>
           </div>
@@ -3277,6 +4291,11 @@ function AutomataEditor() {
           style={{
             display: "flex",
             flexDirection: "column",
+            alignItems: "center",
+            width: 18,
+            background: "#0b1324",
+            borderLeft: "1px solid #1e293b",
+            boxSizing: "border-box",
             zIndex: 20,
           }}
         >
@@ -3284,14 +4303,15 @@ function AutomataEditor() {
             onClick={() => setSidebarCollapsed((c) => !c)}
             title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             style={{
-              background: "#334155",
+              background: "transparent",
               border: "none",
+              borderBottom: !sidebarCollapsed ? "1px solid #1e293b" : "none",
               color: "#e2e8f0",
               cursor: "pointer",
-              padding: "4px 2px",
+              padding: "6px 0",
               fontSize: 12,
               lineHeight: 1,
-              width: 18,
+              width: "100%",
             }}
           >
             {sidebarCollapsed ? "◀" : "▶"}
@@ -3301,9 +4321,11 @@ function AutomataEditor() {
               onMouseDown={startResizing}
               style={{
                 flex: 1,
-                width: "5px",
+                width: 2,
+                margin: "6px 0",
                 cursor: "col-resize",
                 background: "#334155",
+                borderRadius: 999,
                 transition: "background 0.2s",
               }}
               onMouseOver={(e) =>
@@ -3327,8 +4349,8 @@ function AutomataEditor() {
             alphabet={alphabet}
             q0={q0}
             F={F}
-            history={history}
             pdaConfigs={pdaConfigs}
+            pdaSettings={pdaSettings}
             tmConfigs={tmConfigs}
             tmSettings={tmSettings}
             transitionMap={transitionMap}
@@ -3336,12 +4358,13 @@ function AutomataEditor() {
             simTimeline={simTimeline}
             timelineIndex={timelineIndex}
             onJumpToStep={jumpToStep}
+            onPersistDraft={persistDraftNow}
             inputString={inputString}
             pdaAcceptMode={pdaAcceptMode}
           />
         )}
       </div>
-    </div>
+    </main>
   );
 }
 

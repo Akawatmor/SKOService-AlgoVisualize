@@ -2,9 +2,60 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Edge, Node } from '@xyflow/react';
-import type { ModeType, PdaConfig, TmConfig, TmSettings, PdaRule, TmRule, SimSnapshot } from './types';
+import type { ModeType, PdaConfig, PdaSettings, TmConfig, TmSettings, PdaRule, TmRule, SimSnapshot } from './types';
 import { TM_BLANK } from './constants';
-import { parsePdaRules, parseTmRules } from './utils';
+import {
+  formatPdaExtensionSummary,
+  formatPdaStoreContents,
+  getPdaConfigStores,
+  getPdaStoreCount,
+  parsePdaRules,
+  parseTmRules,
+} from './utils';
+
+const TM_DEFAULT_SHEET_COLUMNS = 8;
+
+const normalizeSheetColumns = (value: number) => Math.max(2, Math.min(16, Number(value) || TM_DEFAULT_SHEET_COLUMNS));
+
+const getTmRuleArity = (settings: TmSettings) => settings.headTrackMap.reduce((sum, tracks) => sum + tracks.length, 0);
+
+const getTmRuleSlots = (settings: TmSettings) =>
+  settings.headTrackMap.flatMap((tracks, headIndex) =>
+    tracks.map((tapeIndex) => ({ headIndex, tapeIndex }))
+  );
+
+const getTmReadSymbols = (cfg: TmConfig, settings: TmSettings) =>
+  getTmRuleSlots(settings).map(({ headIndex, tapeIndex }) => {
+    const headPos = cfg.heads[headIndex] ?? 0;
+    const tape = cfg.tapes[tapeIndex] ?? [TM_BLANK];
+    return tape[headPos] ?? TM_BLANK;
+  });
+
+const formatTmCursorPosition = (position: number, settings: TmSettings) => {
+  if (settings.sheetMode !== 'sheet-2d') return String(position);
+  const columns = normalizeSheetColumns(settings.sheetColumns);
+  return `r${Math.floor(position / columns)}c${position % columns}`;
+};
+
+const formatTmExtensionSummary = (settings: TmSettings) => {
+  const parts: string[] = [];
+  if (settings.sheetMode === 'sheet-2d') parts.push(`2D ${normalizeSheetColumns(settings.sheetColumns)} cols`);
+  if (settings.ramEnabled) parts.push('RAM jump');
+  if (settings.stateStorageEnabled) parts.push('State storage');
+  return parts.length > 0 ? parts.join(' · ') : 'Classic tape';
+};
+
+const extractStateStorage = (label?: string) => {
+  const trimmed = (label || '').trim();
+  const match = trimmed.match(/(?:\{([^{}]+)\}|\[([^\[\]]+)\])\s*$/);
+  return (match?.[1] ?? match?.[2] ?? '').trim() || null;
+};
+
+const buildIdTimelineHash = (timelinePayload: unknown) => {
+  const hashParams = new URLSearchParams();
+  hashParams.set('timeline', JSON.stringify(timelinePayload));
+  return hashParams.toString();
+};
 
 // ─── Props ───
 
@@ -17,8 +68,8 @@ interface SidebarProps {
   alphabet: string[];
   q0: string;
   F: string[];
-  history: string[];
   pdaConfigs: PdaConfig[];
+  pdaSettings: PdaSettings;
   tmConfigs: TmConfig[];
   tmSettings: TmSettings;
   transitionMap: Record<string, Record<string, string[]>>;
@@ -26,6 +77,7 @@ interface SidebarProps {
   simTimeline: SimSnapshot[];
   timelineIndex: number;
   onJumpToStep?: (idx: number) => void;
+  onPersistDraft?: () => void;
   inputString?: string;
   pdaAcceptMode?: string;
 }
@@ -41,8 +93,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   alphabet,
   q0,
   F,
-  history,
   pdaConfigs,
+  pdaSettings,
   tmConfigs,
   tmSettings,
   transitionMap,
@@ -50,59 +102,379 @@ export const Sidebar: React.FC<SidebarProps> = ({
   simTimeline,
   timelineIndex,
   onJumpToStep,
+  onPersistDraft,
   inputString = '',
   pdaAcceptMode = 'final-state',
 }) => {
   const router = useRouter();
   const [pdaStackView, setPdaStackView] = useState<'top' | 'raw'>('top');
-  const [tmCfgIndex, setTmCfgIndex] = useState(0);
+  const pdaStoreCount = getPdaStoreCount(pdaSettings);
+  const pdaExtensionLabel = formatPdaExtensionSummary(pdaSettings);
+
+  const getOrderedPdaStore = (store: string[]) => {
+    if (pdaSettings.storageModel === 'queue') return [...store];
+    return pdaStackView === 'top' ? [...store].reverse() : [...store];
+  };
+
+  const renderPdaStoreTokens = (store: string[]) => {
+    const ordered = getOrderedPdaStore(store);
+    if (ordered.length === 0) {
+      return <span style={{ color: '#94a3b8' }}>ε</span>;
+    }
+    return (
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {ordered.map((token, index) => (
+          <span
+            key={`${token}-${index}`}
+            style={{
+              display: 'inline-block',
+              padding: '1px 4px',
+              background: index === 0 ? '#7c3aed' : '#334155',
+              color: '#fff',
+              borderRadius: 3,
+              fontSize: 12,
+              fontWeight: index === 0 ? 600 : 400,
+            }}
+          >
+            {token}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
+  const renderPdaStoreSummaryPreview = (store: string[], count: number) => {
+    const ordered = getOrderedPdaStore(store);
+
+    if (pdaSettings.storageModel === 'queue') {
+      return (
+        <div
+          style={{
+            minWidth: 180,
+            padding: 10,
+            borderRadius: 10,
+            background: '#111827',
+            border: '1px solid #1f2937',
+            display: 'grid',
+            gap: 8,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <span style={{ color: '#cbd5e1', fontSize: 11, fontWeight: 700 }}>Queue Snapshot</span>
+            <span
+              style={{
+                padding: '2px 8px',
+                borderRadius: 999,
+                background: '#0f172a',
+                border: '1px solid #334155',
+                color: '#e2e8f0',
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            >
+              x{count}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#64748b' }}>
+            <span>Front</span>
+            <span>Rear</span>
+          </div>
+          {ordered.length === 0 ? (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minHeight: 52,
+                borderRadius: 8,
+                border: '1px dashed #334155',
+                color: '#94a3b8',
+                fontSize: 12,
+                background: '#0b1324',
+              }}
+            >
+              ε
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2 }}>
+              {ordered.map((token, index) => (
+                <div
+                  key={`pda-queue-summary-${token}-${index}`}
+                  style={{
+                    minWidth: 34,
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    textAlign: 'center',
+                    background: index === 0 ? '#0c4a6e' : '#0f172a',
+                    border: index === 0 ? '1px solid #38bdf8' : '1px solid #334155',
+                    color: '#e2e8f0',
+                    fontSize: 12,
+                    fontWeight: index === 0 ? 700 : 600,
+                  }}
+                >
+                  {token}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div
+        style={{
+          minWidth: 120,
+          padding: 10,
+          borderRadius: 10,
+          background: '#111827',
+          border: '1px solid #1f2937',
+          display: 'grid',
+          gap: 8,
+          alignContent: 'start',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <span style={{ color: '#cbd5e1', fontSize: 11, fontWeight: 700 }}>Stack Snapshot</span>
+          <span
+            style={{
+              padding: '2px 8px',
+              borderRadius: 999,
+              background: '#0f172a',
+              border: '1px solid #334155',
+              color: '#e2e8f0',
+              fontSize: 11,
+              fontWeight: 700,
+            }}
+          >
+            x{count}
+          </span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#64748b' }}>
+          <span>{pdaStackView === 'top' ? 'Top' : 'Raw start'}</span>
+          <span>{pdaStackView === 'top' ? 'Bottom' : 'Raw end'}</span>
+        </div>
+        {ordered.length === 0 ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: 120,
+              borderRadius: 8,
+              border: '1px dashed #334155',
+              color: '#94a3b8',
+              fontSize: 12,
+              background: '#0b1324',
+            }}
+          >
+            ε
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              alignItems: 'stretch',
+            }}
+          >
+            {ordered.map((token, index) => (
+              <div
+                key={`pda-stack-summary-${token}-${index}`}
+                style={{
+                  padding: '6px 8px',
+                  borderRadius: 8,
+                  background: index === 0 ? '#4c1d95' : '#0f172a',
+                  border: index === 0 ? '1px solid #a78bfa' : '1px solid #334155',
+                  color: '#f8fafc',
+                  textAlign: 'center',
+                  fontSize: 12,
+                  fontWeight: index === 0 ? 700 : 600,
+                  boxShadow: index === 0 ? '0 0 0 1px rgba(167,139,250,0.18) inset' : 'none',
+                }}
+              >
+                {token}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const pdaSummaryByStore = Array.from({ length: pdaStoreCount }, (_, storeIndex) => {
+    const counts = new Map<string, { count: number; store: string[] }>();
+    pdaConfigs.forEach((cfg) => {
+      const store = getPdaConfigStores(cfg, pdaSettings)[storeIndex] ?? [];
+      const key = store.join('\u0001');
+      const entry = counts.get(key);
+      if (entry) {
+        entry.count += 1;
+        return;
+      }
+      counts.set(key, { count: 1, store: [...store] });
+    });
+    return {
+      storeIndex,
+      entries: Array.from(counts.values()).sort((left, right) => right.count - left.count),
+    };
+  });
+
+  const pdaConfigsByState = Array.from(
+    pdaConfigs.reduce((groups, cfg) => {
+      const group = groups.get(cfg.state) || [];
+      group.push(cfg);
+      groups.set(cfg.state, group);
+      return groups;
+    }, new Map<string, PdaConfig[]>())
+  );
+
+  const formatPdaOperand = (values: string[]) =>
+    values.length <= 1 ? values[0] : `(${values.join(', ')})`;
 
   // Handler for viewing instantaneous descriptions
   const handleViewID = () => {
+    onPersistDraft?.();
+
     if (isPdaMode && simTimeline.length > 0) {
-      // Build full PDA configs with input string context from timeline
-      const fullConfigs = simTimeline.flatMap((snap) => 
-        snap.pdaConfigs.map((cfg) => ({
+      const timelinePayload = simTimeline.map((snap) => ({
+        stepIndex: snap.stepIndex,
+        simMessage: snap.simMessage,
+        pdaConfigs: (snap.pdaPathConfigs ?? snap.pdaConfigs).map((cfg) => ({
           state: cfg.state,
-          stack: cfg.stack,
-          input: inputString,
-          index: snap.stepIndex,
-        }))
-      );
-      
+          stack: [...cfg.stack],
+          stacks: getPdaConfigStores(cfg, pdaSettings).map((store) => [...store]),
+          storageModel: cfg.storageModel ?? pdaSettings.storageModel,
+        })),
+        pdaPathNodes: (snap.pdaPathNodes ?? []).map((node) => ({
+          id: node.id,
+          parentId: node.parentId,
+          stepIndex: node.stepIndex,
+          state: node.state,
+          stack: [...node.stack],
+          stacks: Array.isArray(node.stacks)
+            ? node.stacks.map((store) => [...store])
+            : [node.stack],
+          storageModel: node.storageModel ?? pdaSettings.storageModel,
+          transitionLabel: node.transitionLabel,
+        })),
+      }));
+
       const params = new URLSearchParams({
         mode,
-        configs: encodeURIComponent(JSON.stringify(fullConfigs)),
         input: inputString,
         acceptMode: pdaAcceptMode,
+        pdaSettings: encodeURIComponent(JSON.stringify(pdaSettings)),
       });
-      router.push(`/automata/instantaneous-description?${params.toString()}`);
+      router.push(`/automata/instantaneous-description?${params.toString()}#${buildIdTimelineHash(timelinePayload)}`);
     } else if (isTmMode && simTimeline.length > 0) {
-      const fullConfigs = simTimeline.flatMap(snap => snap.tmConfigs);
+      const timelinePayload = simTimeline.map((snap) => ({
+        stepIndex: snap.stepIndex,
+        simMessage: snap.simMessage,
+        tmConfigs: (snap.tmPathConfigs ?? snap.tmConfigs).map((cfg) => ({
+          state: cfg.state,
+          tapes: cfg.tapes.map((tape) => [...tape]),
+          heads: [...cfg.heads],
+        })),
+        tmPathNodes: (snap.tmPathNodes ?? []).map((node) => ({
+          id: node.id,
+          parentId: node.parentId,
+          stepIndex: node.stepIndex,
+          state: node.state,
+          tapes: node.tapes.map((tape) => [...tape]),
+          heads: [...node.heads],
+          transitionLabel: node.transitionLabel,
+        })),
+      }));
       const params = new URLSearchParams({
         mode,
-        configs: encodeURIComponent(JSON.stringify(fullConfigs)),
         input: inputString,
+        tmSettings: encodeURIComponent(JSON.stringify(tmSettings)),
       });
-      router.push(`/automata/instantaneous-description?${params.toString()}`);
+      router.push(`/automata/instantaneous-description?${params.toString()}#${buildIdTimelineHash(timelinePayload)}`);
     }
   };
   const [tmTimelineExpanded, setTmTimelineExpanded] = useState<Set<number>>(new Set());
   const Q = stateNodes.map(n => n.id);
-
-  // Keep tmCfgIndex in bounds when configs change
-  const safeTmIdx = tmConfigs.length > 0 ? Math.min(tmCfgIndex, tmConfigs.length - 1) : 0;
+  const tmInputModeLabel = tmSettings.inputMode === 'textbook'
+    ? 'Textbook input on all tapes'
+    : 'Machine input on Tape 1';
+  const tmExtensionLabel = formatTmExtensionSummary(tmSettings);
+  const tmMappingLabel = tmSettings.headTrackMap
+        .map((tracks, headIndex) => `H${headIndex + 1}->${tracks.map((tapeIndex) => `T${tapeIndex + 1}`).join('+')}`)
+        .join(', ');
+  const getStateStorageLabel = (stateId: string) => {
+    if (!tmSettings.stateStorageEnabled) return null;
+    const stateNode = stateNodes.find((node) => node.id === stateId);
+    const label = typeof stateNode?.data?.label === 'string' ? stateNode.data.label : stateId;
+    return extractStateStorage(label);
+  };
 
   // Helper: render a single TM tape with multiple head support
-  const renderTape = (tape: string[], heads: number[], headToTape: number[], tapeIdx: number, compact: boolean = false) => {
+  const renderTape = (tape: string[], heads: number[], tapeIdx: number, compact: boolean = false) => {
     // Find all heads on this tape
-    const headsOnTape = headToTape
-      .map((t, h) => ({ tapeIndex: t, headIndex: h }))
-      .filter(h => h.tapeIndex === tapeIdx)
-      .map(h => h.headIndex);
+    const headsOnTape = tmSettings.headTrackMap
+      .map((tracks, headIndex) => ({ tracks, headIndex }))
+      .filter((entry) => entry.tracks.includes(tapeIdx))
+      .map((entry) => entry.headIndex);
     
     const headPositions = headsOnTape.map(h => heads[h]);
     
+    if (tmSettings.sheetMode === 'sheet-2d') {
+      const columns = normalizeSheetColumns(tmSettings.sheetColumns);
+      return (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${columns}, minmax(${compact ? 30 : 44}px, 1fr))`,
+            gap: compact ? 4 : 6,
+            padding: compact ? '2px 0' : '4px 0',
+          }}
+        >
+          {tape.map((ch, idx) => {
+            const isHead = headPositions.includes(idx);
+            const headLabels = headsOnTape.filter((headIndex) => heads[headIndex] === idx);
+            const rowIndex = Math.floor(idx / columns);
+            const columnIndex = idx % columns;
+
+            return (
+              <span key={idx} style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                <span
+                  style={{
+                    color: isHead ? '#22d3ee' : 'transparent',
+                    fontSize: compact ? 10 : 11,
+                    minHeight: compact ? 12 : 14,
+                    fontWeight: 700,
+                  }}
+                >
+                  {isHead ? headLabels.map((headIndex) => `H${headIndex + 1}`).join(',') : '.'}
+                </span>
+                <span
+                  style={{
+                    minWidth: compact ? 26 : 34,
+                    textAlign: 'center',
+                    padding: compact ? '4px 2px' : '6px 4px',
+                    border: isHead ? '2px solid #22d3ee' : '1px solid #334155',
+                    borderRadius: compact ? 4 : 6,
+                    color: isHead ? '#ffffff' : '#cbd5e1',
+                    background: isHead ? '#0369a1' : '#0f172a',
+                    fontWeight: isHead ? 700 : 400,
+                    fontSize: compact ? 11 : 13,
+                  }}
+                >
+                  {ch || TM_BLANK}
+                </span>
+                <span style={{ fontSize: 9, color: '#64748b', minHeight: 12 }}>
+                  r{rowIndex}c{columnIndex}
+                </span>
+              </span>
+            );
+          })}
+        </div>
+      );
+    }
+
     return (
       <div style={{ overflowX: 'auto', whiteSpace: 'nowrap', padding: compact ? '2px 0' : '4px 0' }}>
         {tape.map((ch, idx) => {
@@ -150,10 +522,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Helper: render all tapes for a config
   const renderMultiTape = (tapes: string[][], heads: number[], compact: boolean = false) => {
-    const { headToTape } = tmSettings;
     if (tapes.length === 1) {
       // Single tape - use simplified render
-      return renderTape(tapes[0], heads, headToTape, 0, compact);
+      return renderTape(tapes[0], heads, 0, compact);
     }
     
     return (
@@ -163,7 +534,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div style={{ fontSize: 10, color: '#64748b', marginBottom: 2 }}>
               Tape {tIdx + 1}
             </div>
-            {renderTape(tape, heads, headToTape, tIdx, compact)}
+            {renderTape(tape, heads, tIdx, compact)}
           </div>
         ))}
       </div>
@@ -179,21 +550,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.4, marginBottom: 12 }}>
         <div><strong>Q</strong>: {"{"}{Q.join(', ')}{"}"}</div>
         <div style={{ marginTop: 6 }}><strong>Σ</strong>: {"{"}{alphabet.join(', ')}{"}"}</div>
+        {isTmMode && (
+          <>
+            <div style={{ marginTop: 6 }}><strong>Tapes / Heads</strong>: {tmSettings.tapeCount} / {tmSettings.headCount}</div>
+            <div style={{ marginTop: 6 }}><strong>Head Map</strong>: {tmMappingLabel}</div>
+            <div style={{ marginTop: 6 }}><strong>Input Mode</strong>: {tmInputModeLabel}</div>
+            <div style={{ marginTop: 6 }}><strong>Extensions</strong>: {tmExtensionLabel}</div>
+          </>
+        )}
+        {isPdaMode && (
+          <>
+            <div style={{ marginTop: 6 }}><strong>PDA Setup</strong>: {pdaExtensionLabel}</div>
+            <div style={{ marginTop: 6 }}><strong>Stores</strong>: {pdaStoreCount}</div>
+          </>
+        )}
         <div style={{ marginTop: 6 }}>
           <strong>δ</strong>: <br/>
           <div style={{ paddingLeft: 10, marginTop: 4 }}>
             {isPdaMode
               ? edges.flatMap((edge, edgeIdx) => {
-                  const rules: PdaRule[] = parsePdaRules(edge.label as string);
+                  const rules: PdaRule[] = parsePdaRules(edge.label as string, pdaSettings);
                   return rules.map((rule, ruleIdx) => (
                     <div key={`pda-delta-${edgeIdx}-${ruleIdx}`}>
-                      δ({edge.source}, {rule.input}, {rule.pop}) = ({edge.target}, {rule.push})
+                      δ({edge.source}, {rule.input}, {formatPdaOperand(rule.pops ?? [rule.pop])}) = ({edge.target}, {formatPdaOperand(rule.pushes ?? [rule.push])})
                     </div>
                   ));
                 })
               : isTmMode
               ? edges.flatMap((edge, edgeIdx) => {
-                  const rules: TmRule[] = parseTmRules(edge.label as string, tmSettings.tapeCount);
+                  const rules: TmRule[] = parseTmRules(edge.label as string, getTmRuleArity(tmSettings));
                   return rules.map((rule, ruleIdx) => {
                     // Format for multi-tape: δ(q, (r1,r2)) = (q', (w1,w2), (m1,m2))
                     const readsStr = rule.reads.length > 1 ? `(${rule.reads.join(',')})` : rule.reads[0];
@@ -329,22 +714,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {isTmMode && isExpanded && snap.tmConfigs.length > 0 && (
                     <div style={{ padding: '4px 8px 8px 30px', display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {snap.tmConfigs.map((cfg, ci) => {
-                        const curSyms = cfg.heads.map((headPos, hIdx) => {
-                          const tapeIdx = tmSettings.headToTape[hIdx];
-                          const tape = cfg.tapes[tapeIdx] || [TM_BLANK];
-                          return tape[headPos] ?? TM_BLANK;
-                        });
+                        const curSyms = getTmReadSymbols(cfg, tmSettings);
                         const isAccept = F.includes(cfg.state);
+                        const stateStorage = getStateStorageLabel(cfg.state);
                         return (
                           <div key={`tl-${stepIdx}-${ci}`} style={{ background: '#0b1324', borderRadius: 4, padding: 8, border: '1px solid #21314a' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 {hasMultiple && <span style={{ fontSize: 9, color: '#64748b', fontWeight: 700 }}>#{ci + 1}</span>}
                                 <span style={{ color: isAccept ? '#4ade80' : '#e2e8f0', fontWeight: 700, fontSize: 13 }}>{cfg.state}</span>
+                                {stateStorage && <span style={{ fontSize: 10, color: '#facc15' }}>{`{${stateStorage}}`}</span>}
                                 {isAccept && <span style={{ fontSize: 9, color: '#4ade80' }}>✓</span>}
                               </div>
                               <div style={{ fontSize: 10, color: '#94a3b8', display: 'flex', gap: 8 }}>
-                                <span>{cfg.heads.length > 1 ? 'Heads' : 'Head'}: <strong style={{ color: '#22d3ee' }}>{cfg.heads.length > 1 ? `[${cfg.heads.join(',')}]` : cfg.heads[0]}</strong></span>
+                                <span>{cfg.heads.length > 1 ? 'Heads' : 'Head'}: <strong style={{ color: '#22d3ee' }}>{cfg.heads.map((position) => formatTmCursorPosition(position, tmSettings)).join(', ')}</strong></span>
                                 <span>Read: <strong style={{ color: '#facc15' }}>{curSyms.length > 1 ? `(${curSyms.join(',')})` : curSyms[0]}</strong></span>
                               </div>
                             </div>
@@ -403,7 +786,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   border: '1px solid #21314a', padding: '3px 8px', borderRadius: 4, fontSize: 11, cursor: 'pointer'
                 }}
               >
-                Top→Bottom
+                {pdaSettings.storageModel === 'queue' ? 'Front→Rear' : 'Top→Bottom'}
               </button>
               <button
                 onClick={() => setPdaStackView('raw')}
@@ -417,56 +800,106 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
             </div>
           </div>
-          <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.4, marginBottom: 12, maxHeight: 220, overflowY: 'auto', background: '#0f172a', borderRadius: 4, border: '1px solid #21314a' }}>
+          <div
+            style={{
+              display: 'grid',
+              gap: 10,
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ background: '#0f172a', borderRadius: 6, border: '1px solid #21314a', padding: 10 }}>
+              <div style={{ color: '#e2e8f0', fontWeight: 600, marginBottom: 4 }}>Store Summary</div>
+              <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 10 }}>
+                สรุปภาพรวมของ store ปัจจุบันทุก configuration ก่อนแยกตาม state
+              </div>
+              <div style={{ display: 'grid', gap: 10 }}>
+                {pdaSummaryByStore.map(({ storeIndex, entries }) => (
+                  <div key={`pda-summary-${storeIndex}`}>
+                    <div style={{ color: '#cbd5e1', fontWeight: 600, marginBottom: 6 }}>
+                      {pdaSettings.storageModel === 'queue'
+                        ? 'Queue'
+                        : pdaStoreCount > 1
+                        ? `Stack ${storeIndex + 1}`
+                        : 'Stack'}
+                    </div>
+                    {entries.length === 0 ? (
+                      <div style={{ color: '#94a3b8', fontSize: 12 }}>No active content</div>
+                    ) : (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-start' }}>
+                        {entries.map((entry, entryIndex) => (
+                          <div
+                            key={`pda-summary-chip-${storeIndex}-${entryIndex}`}
+                          >
+                            {renderPdaStoreSummaryPreview(entry.store, entry.count)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.4, maxHeight: 260, overflowY: 'auto', background: '#0f172a', borderRadius: 4, border: '1px solid #21314a' }}>
+              <div style={{ padding: '10px 10px 0', color: '#e2e8f0', fontWeight: 600 }}>
+                Store by State
+              </div>
             {pdaConfigs.length === 0 ? (
               <div style={{ padding: 8 }}>No active PDA configuration</div>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ textAlign: 'left', color: '#94a3b8' }}>
-                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #21314a', width: '35%' }}>State</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #21314a', width: '25%' }}>State</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #21314a', width: '15%' }}>Configs</th>
                     <th style={{ padding: '6px 8px', borderBottom: '1px solid #21314a' }}>
-                      {pdaStackView === 'top' ? 'Stack (top → bottom)' : 'Stack (raw order)'}
+                      {pdaSettings.storageModel === 'queue'
+                        ? 'Queue Snapshots'
+                        : pdaStackView === 'top'
+                        ? 'Store Snapshots (display order)'
+                        : 'Store Snapshots (raw order)'}
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pdaConfigs.slice(0, 40).map((cfg, i) => {
-                    const stackDisplay = cfg.stack.length === 0
-                      ? 'ε'
-                      : pdaStackView === 'top'
-                        ? [...cfg.stack].reverse().map((sym, idx) => (
-                            <span key={idx} style={{ 
-                              display: 'inline-block',
-                              padding: '1px 4px',
-                              margin: '0 2px',
-                              background: idx === 0 ? '#7c3aed' : '#334155',
-                              color: '#fff',
-                              borderRadius: 3,
-                              fontSize: 12,
-                              fontWeight: idx === 0 ? 600 : 400
-                            }}>
-                              {sym}
-                            </span>
-                          ))
-                        : cfg.stack.map((sym, idx) => (
-                            <span key={idx} style={{ 
-                              display: 'inline-block',
-                              padding: '1px 4px',
-                              margin: '0 2px',
-                              background: '#334155',
-                              color: '#cbd5e1',
-                              borderRadius: 3,
-                              fontSize: 12
-                            }}>
-                              {sym}
-                            </span>
-                          ));
+                  {pdaConfigsByState.slice(0, 40).map(([state, configs]) => {
                     return (
-                      <tr key={`pda-cfg-${cfg.state}-${cfg.stack.join('')}-${i}`} style={{ borderBottom: '1px dashed #0b1324' }}>
-                        <td style={{ padding: '6px 8px', color: '#e2e8f0', fontWeight: 600 }}>{cfg.state}</td>
+                      <tr key={`pda-group-${state}`} style={{ borderBottom: '1px dashed #0b1324' }}>
+                        <td style={{ padding: '6px 8px', color: '#e2e8f0', fontWeight: 600 }}>{state}</td>
+                        <td style={{ padding: '6px 8px', color: '#cbd5e1' }}>{configs.length}</td>
                         <td style={{ padding: '6px 8px', color: '#cbd5e1' }}>
-                          {typeof stackDisplay === 'string' ? stackDisplay : <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>{stackDisplay}</div>}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {configs.map((cfg, configIndex) => {
+                              const stores = getPdaConfigStores(cfg, pdaSettings);
+                              return (
+                                <div
+                                  key={`pda-state-${state}-${configIndex}`}
+                                  style={{
+                                    display: 'grid',
+                                    gap: 4,
+                                    padding: '6px 8px',
+                                    borderRadius: 6,
+                                    background: '#111827',
+                                    border: '1px solid #1f2937',
+                                  }}
+                                >
+                                  <div style={{ fontSize: 11, color: '#94a3b8' }}>Config #{configIndex + 1}</div>
+                                  {stores.map((store, storeIndex) => (
+                                    <div key={`pda-state-${state}-${configIndex}-${storeIndex}`} style={{ display: 'grid', gap: 4 }}>
+                                      <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                                        {pdaSettings.storageModel === 'queue'
+                                          ? 'Queue'
+                                          : pdaStoreCount > 1
+                                          ? `Stack ${storeIndex + 1}`
+                                          : 'Stack'}
+                                      </div>
+                                      {renderPdaStoreTokens(store)}
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            })}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -479,6 +912,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 Showing first 40 of {pdaConfigs.length} configurations
               </div>
             )}
+            </div>
           </div>
         </>
       )}
@@ -528,6 +962,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div style={{ marginBottom: 6 }}>
                       <span style={{ color: '#94a3b8' }}>State: </span>
                       <span style={{ color: '#4ade80', fontWeight: 600 }}>{cfg.state}</span>
+                      {getStateStorageLabel(cfg.state) && (
+                        <span style={{ color: '#facc15', marginLeft: 6 }}>{`{${getStateStorageLabel(cfg.state)}}`}</span>
+                      )}
+                    </div>
+                    <div style={{ marginBottom: 6, fontSize: 11, color: '#94a3b8' }}>
+                      {cfg.heads.length > 1
+                        ? `Heads: ${cfg.heads.map((position, headIndex) => `H${headIndex + 1}@${formatTmCursorPosition(position, tmSettings)}`).join(', ')}`
+                        : `Head: H1@${formatTmCursorPosition(cfg.heads[0] ?? 0, tmSettings)}`}
                     </div>
                     {renderMultiTape(cfg.tapes, cfg.heads, true)}
                   </div>
@@ -558,7 +1000,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               const from = edge.source;
               const to = edge.target;
               const label = edge.label?.toString() || '';
-              const tmRules = parseTmRules(label, tmSettings.tapeCount);
+              const tmRules = parseTmRules(label, getTmRuleArity(tmSettings));
               
               tmRules.forEach((rule) => {
                 const read = rule.reads.length > 1 ? `(${rule.reads.join(',')})` : rule.reads[0];
