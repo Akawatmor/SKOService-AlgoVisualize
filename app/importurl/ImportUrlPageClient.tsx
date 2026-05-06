@@ -7,40 +7,16 @@ import React, { useEffect, useState } from "react";
 import {
   AUTOMATA_SHARE_QUERY_KEY,
   VISUALIZER_SHARED_IMPORT_KEY,
+  resolveAutomataImportUrl,
 } from "../automata/visualizer/shareUrl";
 
 const VISUALIZER_PATH = "/automata/visualizer";
 
-const validateImportUrl = (value: string | null) => {
-  if (!value) {
-    return {
-      status: "error" as const,
-      errorMessage: "Missing automatavis import URL in the query string.",
-    };
-  }
-
-  try {
-    const parsedUrl = new URL(value);
-    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-      throw new Error("Unsupported protocol");
-    }
-    return {
-      status: "ready" as const,
-      importUrl: parsedUrl.toString(),
-    };
-  } catch (error) {
-    console.error("Failed to parse import URL", error);
-    return {
-      status: "error" as const,
-      errorMessage: "The automatavis value must be a valid http(s) URL.",
-    };
-  }
-};
-
 export default function ImportUrlPageClient() {
   const searchParams = useSearchParams();
   const rawImportUrl = searchParams.get(AUTOMATA_SHARE_QUERY_KEY);
-  const urlState = validateImportUrl(rawImportUrl);
+  const pageProtocol = typeof window === "undefined" ? "https:" : window.location.protocol;
+  const urlState = resolveAutomataImportUrl(rawImportUrl, pageProtocol);
   const [loadState, setLoadState] = useState<
     | { status: "loading" }
     | { status: "error"; errorMessage: string }
@@ -77,7 +53,9 @@ export default function ImportUrlPageClient() {
         setLoadState({
           status: "error",
           errorMessage:
-            "Unable to fetch or parse JSON from the provided import URL. Check the URL, CORS policy, and JSON payload.",
+            urlState.wasUpgradedToHttps
+              ? "The source URL was upgraded to HTTPS to avoid mixed content, but the request still failed. Check that the source supports HTTPS, CORS, and valid JSON."
+              : "Unable to fetch or parse JSON from the provided import URL. Check the URL, CORS policy, and JSON payload.",
         });
       }
     };
@@ -141,7 +119,7 @@ export default function ImportUrlPageClient() {
         </p>
 
         {urlState.status === "ready" ? (
-          <p
+          <div
             style={{
               margin: "14px 0 0",
               color: "#67e8f9",
@@ -150,8 +128,13 @@ export default function ImportUrlPageClient() {
               wordBreak: "break-all",
             }}
           >
-            Source URL: {urlState.importUrl}
-          </p>
+            <p style={{ margin: 0 }}>Source URL: {urlState.originalUrl}</p>
+            {urlState.wasUpgradedToHttps ? (
+              <p style={{ margin: "8px 0 0", color: "#facc15" }}>
+                Upgraded to HTTPS to avoid mixed content: {urlState.importUrl}
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 24 }}>

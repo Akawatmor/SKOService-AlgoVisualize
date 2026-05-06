@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { resolveAutomataImportUrl } from './shareUrl';
 
 /* ────────── Types ────────── */
 
@@ -115,7 +116,16 @@ export default function ImportModal({ open, onClose, onImport, isRunning }: Impo
     if (!trimmed) return;
     setUrlLoading(true);
     try {
-      const res = await fetch(trimmed);
+      const resolvedUrl = resolveAutomataImportUrl(trimmed, window.location.protocol);
+      if (resolvedUrl.status !== 'ready') {
+        throw new Error(resolvedUrl.errorMessage);
+      }
+
+      if (resolvedUrl.wasUpgradedToHttps) {
+        setUrl(resolvedUrl.importUrl);
+      }
+
+      const res = await fetch(resolvedUrl.importUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
       JSON.parse(text); // validate
@@ -123,7 +133,7 @@ export default function ImportModal({ open, onClose, onImport, isRunning }: Impo
       await onImport(text);
     } catch {
       // Show inline error – we avoid importing swal here to keep the component independent
-      alert('Failed to fetch or parse JSON from the given URL.');
+      alert('Failed to fetch or parse JSON from the given URL. On HTTPS pages, HTTP URLs are upgraded to HTTPS automatically to avoid mixed content.');
     } finally {
       setUrlLoading(false);
     }
@@ -280,6 +290,7 @@ export default function ImportModal({ open, onClose, onImport, isRunning }: Impo
                 <ul style={{ margin: 0, paddingLeft: 18, color: '#64748b', fontSize: 12, lineHeight: 1.6 }}>
                   <li>Use a direct link to a raw JSON file</li>
                   <li>For GitHub files, use the <em>Raw</em> URL</li>
+                  <li>On HTTPS sites, pasted HTTP URLs are upgraded to HTTPS automatically</li>
                   <li>The URL must return valid JSON with nodes &amp; edges</li>
                   <li>CORS must be enabled on the server</li>
                 </ul>
